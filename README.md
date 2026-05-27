@@ -8,10 +8,11 @@
 
 ---
 
-[![Maturity Status](https://img.shields.io/badge/Status-Active%20Development%20%7C%20Alpha-red.svg)](#)
-[![Local First](https://img.shields.io/badge/Architecture-Local%20First-green.svg)](#)
-[![Protocol](https://img.shields.io/badge/Protocol-MCP%20Native-blue.svg)](#)
-[![Zero-Dependency](https://img.shields.io/badge/Dependency-0--Click%20Indexing-orange.svg)](#)
+[![Works with Claude](https://img.shields.io/badge/Works%20with-Claude-orange.svg)](#)
+[![Works with Cursor](https://img.shields.io/badge/Works%20with-Cursor-blue.svg)](#)
+[![MCP Native](https://img.shields.io/badge/MCP-Native-blueviolet.svg)](#)
+[![No Cloud Required](https://img.shields.io/badge/No%20Cloud-100%25%20Local-green.svg)](#)
+[![Zero Config](https://img.shields.io/badge/Setup-Zero%20Config-brightgreen.svg)](#)
 
 ---
 
