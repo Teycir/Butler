@@ -1,6 +1,6 @@
 # 🌐 Butler
 
-![Butler](butler_banner.gif)
+![Butler](public/butler_banner.gif)
 
 > **Persistent Coordination and Memory Layer for AI Coding Agents.**
 >
