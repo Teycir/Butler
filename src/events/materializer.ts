@@ -27,7 +27,7 @@ export interface DecisionItem {
 export interface ProjectState {
   todos: Record<number, TodoItem>;
   wiki: Record<string, WikiPage>;
-  rules: string[];
+  rules: Record<string, { id: string; content: string; version: number }>;
   decisions: Record<string, DecisionItem>;
   handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: HandoffPayload; source?: 'agent' | 'system' }>;
   lastEventId: number;
@@ -37,7 +37,7 @@ export function createInitialState(): ProjectState {
   return {
     todos: {},
     wiki: {},
-    rules: [],
+    rules: {},
     decisions: {},
     handoffs: [],
     lastEventId: 0
@@ -55,7 +55,7 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
   const updatedState = {
     todos: { ...state.todos },
     wiki: { ...state.wiki },
-    rules: [...state.rules],
+    rules: { ...state.rules },
     decisions: { ...state.decisions },
     handoffs: [...state.handoffs],
     lastEventId: event.id
@@ -131,16 +131,20 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     }
 
     case 'RULE_ADDED': {
+      const ruleId = String(payload.rule_id);
       const ruleContent = String(payload.content);
-      if (!updatedState.rules.includes(ruleContent)) {
-        updatedState.rules.push(ruleContent);
-      }
+      const existing = updatedState.rules[ruleId];
+      updatedState.rules[ruleId] = {
+        id: ruleId,
+        content: ruleContent,
+        version: existing ? existing.version + 1 : 1
+      };
       break;
     }
 
     case 'RULE_REMOVED': {
-      const ruleContent = String(payload.content);
-      updatedState.rules = updatedState.rules.filter(r => r !== ruleContent);
+      const ruleId = String(payload.rule_id);
+      delete updatedState.rules[ruleId];
       break;
     }
 

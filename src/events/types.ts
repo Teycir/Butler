@@ -18,6 +18,7 @@ export type EventType =
   // Memory Events
   | 'SUMMARY_CREATED'
   | 'MEMORY_EXTRACTED'
+  | 'MEMORY_DELETED'
   | 'SNAPSHOT_CREATED';
 
 // Memory type constants - single source of truth
@@ -91,12 +92,13 @@ export interface EventPayloadMap {
   'TODO_COMPLETED': { todo_id: number; version: number };
   'TODO_DELETED': { todo_id: number };
   'WIKI_UPDATED': { topic: string; content: string };
-  'RULE_ADDED': { content: string };
-  'RULE_REMOVED': { content: string };
+  'RULE_ADDED': { rule_id: string; content: string };
+  'RULE_REMOVED': { rule_id: string };
   'DECISION_RECORDED': { decision_id: string; title: string; context: string; decision: string };
   'HANDOFF_CREATED': HandoffPayload;
   'SUMMARY_CREATED': any;
   'MEMORY_EXTRACTED': any;
+  'MEMORY_DELETED': { memory_id: number };
   'SNAPSHOT_CREATED': any;
 }
 

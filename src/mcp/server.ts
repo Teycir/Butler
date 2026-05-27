@@ -1,5 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { randomUUID } from 'crypto';
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -24,7 +25,7 @@ import {
   validateSession,
   updateLastEventSeen
 } from '../coordinator/lifecycle.js';
-import { searchMemories, addMemory, getMemories } from '../vector/index.js';
+import { searchMemories, addMemory, getMemories, deleteMemory } from '../vector/index.js';
 
 export class ButlerMcpServer {
   private server: Server;
@@ -246,11 +247,12 @@ export class ButlerMcpServer {
           markdownContext += `\n`;
 
           markdownContext += `## 📜 Materialized Shared Rules\n`;
-          if (state.rules.length === 0) {
+          const rulesList = Object.values(state.rules);
+          if (rulesList.length === 0) {
             markdownContext += `- No active project coding guidelines. Add one with \`rule.add\`!\n`;
           } else {
-            for (const rule of state.rules) {
-              markdownContext += `- ${rule}\n`;
+            for (const rule of rulesList) {
+              markdownContext += `- [${rule.id}] ${rule.content}\n`;
             }
           }
           markdownContext += `\n`;
@@ -437,15 +439,49 @@ export class ButlerMcpServer {
           },
           {
             name: 'rule.remove',
-            description: 'Remove a persistent development guideline rule.',
+            description: 'Remove a persistent development guideline rule by ID.',
             inputSchema: {
               type: 'object',
               properties: {
                 project_id: { type: 'string', description: 'Unique project identifier' },
                 session_id: { type: 'string', description: 'Session ID removing the rule' },
-                content: { type: 'string', description: 'Exact rule text to remove' }
+                rule_id: { type: 'string', description: 'UUID of the rule to remove' }
               },
-              required: ['project_id', 'session_id', 'content']
+              required: ['project_id', 'session_id', 'rule_id']
+            }
+          },
+          {
+            name: 'todo.list',
+            description: 'List all active TODOs in the project. Alternative to reading the butler://projects/{id}/todos resource.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'Unique project identifier' },
+                status: { type: 'string', enum: ['pending', 'completed', 'all'], description: 'Filter by status (default: pending)' }
+              },
+              required: ['project_id']
+            }
+          },
+          {
+            name: 'memory.delete',
+            description: 'Delete a memory by ID to remove stale or incorrect information.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'Unique project identifier' },
+                session_id: { type: 'string', description: 'Session ID performing the deletion' },
+                memory_id: { type: 'number', description: 'ID of the memory to delete' }
+              },
+              required: ['project_id', 'memory_id']
+            }
+          },
+          {
+            name: 'project.list',
+            description: 'List all projects in the Butler database. Useful for agents initializing into an unknown workspace.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              required: []
             }
           },
           {
@@ -515,6 +551,31 @@ export class ButlerMcpServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name;
       const args = request.params.arguments || {};
+
+      // project.list is the only tool that does not target a specific project
+      if (name === 'project.list') {
+        try {
+          const db = getDb();
+          const rows = db.prepare(
+            'SELECT id, name, created_at FROM projects ORDER BY created_at ASC'
+          ).all() as Array<{ id: string; name: string; created_at: number }>;
+
+          if (rows.length === 0) {
+            return {
+              content: [{ type: 'text', text: 'No projects found in the Butler database. Use session.register to create one.' }]
+            };
+          }
+          const projectList = rows.map(r => ({
+            id: r.id,
+            name: r.name,
+            created_at: new Date(r.created_at * 1000).toISOString()
+          }));
+          return { content: [{ type: 'text', text: JSON.stringify(projectList, null, 2) }] };
+        } catch (err: any) {
+          if (err instanceof McpError) throw err;
+          return { isError: true, content: [{ type: 'text', text: `Internal error: ${err.message}` }] };
+        }
+      }
       
       // Validate required project_id
       if (!args.project_id || typeof args.project_id !== 'string' || args.project_id.trim() === '') {
@@ -627,38 +688,41 @@ export class ButlerMcpServer {
             const todoId = Number(args.todo_id);
             const reqVersion = Number(args.version);
 
-            // NOTE: This check-then-write pattern is safe only under single-threaded Node.js
-            // with synchronous better-sqlite3. If Butler gains concurrent request handling
-            // (e.g., HTTP transport), wrap this in db.transaction() to prevent TOCTOU races.
-            const state = materializeProject(projectId, false);
-            const todo = state.todos[todoId];
+            const db = getDb();
+            const completeTx = db.transaction(() => {
+              const state = materializeProject(projectId, false);
+              const todo = state.todos[todoId];
 
-            if (!todo) {
-              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
-            }
-
-            if (todo.status === 'completed') {
-              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} is already completed.`);
-            }
-
-            if (todo.version !== reqVersion) {
-              throw new McpError(
-                ErrorCode.InvalidParams,
-                `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
-              );
-            }
-
-            const event = appendEvent(
-              projectId,
-              String(args.session_id),
-              'TODO_COMPLETED',
-              {
-                todo_id: todoId,
-                version: reqVersion
+              if (!todo) {
+                throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
               }
-            );
 
-            updateLastEventSeen(String(args.session_id), event.id);
+              if (todo.status === 'completed') {
+                throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} is already completed.`);
+              }
+
+              if (todo.version !== reqVersion) {
+                throw new McpError(
+                  ErrorCode.InvalidParams,
+                  `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
+                );
+              }
+
+              const event = appendEvent(
+                projectId,
+                String(args.session_id),
+                'TODO_COMPLETED',
+                {
+                  todo_id: todoId,
+                  version: reqVersion
+                }
+              );
+
+              updateLastEventSeen(String(args.session_id), event.id);
+              return event;
+            });
+
+            const event = completeTx();
             invalidateProjectCache(projectId);
 
             return {
@@ -676,33 +740,39 @@ export class ButlerMcpServer {
             const todoId = Number(args.todo_id);
             const reqVersion = Number(args.version);
 
-            const state = materializeProject(projectId, false);
-            const todo = state.todos[todoId];
+            const db = getDb();
+            const updateTx = db.transaction(() => {
+              const state = materializeProject(projectId, false);
+              const todo = state.todos[todoId];
 
-            if (!todo) {
-              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
-            }
-
-            if (todo.version !== reqVersion) {
-              throw new McpError(
-                ErrorCode.InvalidParams,
-                `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
-              );
-            }
-
-            const event = appendEvent(
-              projectId,
-              String(args.session_id),
-              'TODO_UPDATED',
-              {
-                todo_id: todoId,
-                title: args.title !== undefined ? String(args.title) : undefined,
-                priority: args.priority as 'low' | 'medium' | 'high' | undefined,
-                status: args.status as 'pending' | 'completed' | undefined
+              if (!todo) {
+                throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
               }
-            );
 
-            updateLastEventSeen(String(args.session_id), event.id);
+              if (todo.version !== reqVersion) {
+                throw new McpError(
+                  ErrorCode.InvalidParams,
+                  `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
+                );
+              }
+
+              const event = appendEvent(
+                projectId,
+                String(args.session_id),
+                'TODO_UPDATED',
+                {
+                  todo_id: todoId,
+                  title: args.title !== undefined ? String(args.title) : undefined,
+                  priority: args.priority as 'low' | 'medium' | 'high' | undefined,
+                  status: args.status as 'pending' | 'completed' | undefined
+                }
+              );
+
+              updateLastEventSeen(String(args.session_id), event.id);
+              return event;
+            });
+
+            const event = updateTx();
             invalidateProjectCache(projectId);
 
             return {
@@ -720,30 +790,36 @@ export class ButlerMcpServer {
             const todoId = Number(args.todo_id);
             const reqVersion = Number(args.version);
 
-            const state = materializeProject(projectId, false);
-            const todo = state.todos[todoId];
+            const db = getDb();
+            const deleteTx = db.transaction(() => {
+              const state = materializeProject(projectId, false);
+              const todo = state.todos[todoId];
 
-            if (!todo) {
-              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
-            }
-
-            if (todo.version !== reqVersion) {
-              throw new McpError(
-                ErrorCode.InvalidParams,
-                `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
-              );
-            }
-
-            const event = appendEvent(
-              projectId,
-              String(args.session_id),
-              'TODO_DELETED',
-              {
-                todo_id: todoId
+              if (!todo) {
+                throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
               }
-            );
 
-            updateLastEventSeen(String(args.session_id), event.id);
+              if (todo.version !== reqVersion) {
+                throw new McpError(
+                  ErrorCode.InvalidParams,
+                  `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
+                );
+              }
+
+              const event = appendEvent(
+                projectId,
+                String(args.session_id),
+                'TODO_DELETED',
+                {
+                  todo_id: todoId
+                }
+              );
+
+              updateLastEventSeen(String(args.session_id), event.id);
+              return event;
+            });
+
+            const event = deleteTx();
             invalidateProjectCache(projectId);
 
             return {
@@ -796,22 +872,38 @@ export class ButlerMcpServer {
             if (content.length > 4096) {
               throw new McpError(ErrorCode.InvalidParams, 'Rule content exceeds maximum length of 4KB');
             }
-            
-            const event = appendEvent(
-              projectId,
-              String(args.session_id),
-              'RULE_ADDED',
-              {
-                content
+
+            const db = getDb();
+            // Wrap in transaction: check-then-write to prevent duplicate rules racing in.
+            const addRuleTx = db.transaction(() => {
+              const state = materializeProject(projectId, false);
+              // Prevent adding an identical rule body twice (idempotency guard)
+              const duplicate = Object.values(state.rules).find(r => r.content === content);
+              if (duplicate) {
+                throw new McpError(
+                  ErrorCode.InvalidRequest,
+                  `An identical rule already exists with ID ${duplicate.id}. Use rule.remove then rule.add to update it.`
+                );
               }
-            );
-            updateLastEventSeen(String(args.session_id), event.id);
+
+              const ruleId = randomUUID();
+              const event = appendEvent(
+                projectId,
+                String(args.session_id),
+                'RULE_ADDED',
+                { rule_id: ruleId, content }
+              );
+              updateLastEventSeen(String(args.session_id), event.id);
+              return { event, ruleId };
+            });
+
+            const { event, ruleId } = addRuleTx();
             invalidateProjectCache(projectId);
             return {
               content: [
                 {
                   type: 'text',
-                  text: `Persistent rule recorded: "${args.content}" (Event ID: ${event.id})`
+                  text: `Persistent rule recorded with ID ${ruleId}: "${content}" (Event ID: ${event.id})`
                 }
               ]
             };
@@ -819,28 +911,34 @@ export class ButlerMcpServer {
 
           case 'rule.remove': {
             validateSession(projectId, String(args.session_id));
-            const content = String(args.content);
-            
-            const state = materializeProject(projectId, false);
-            if (!state.rules.includes(content)) {
-              throw new McpError(ErrorCode.InvalidRequest, `Rule not found: "${content}"`);
-            }
-            
-            const event = appendEvent(
-              projectId,
-              String(args.session_id),
-              'RULE_REMOVED',
-              {
-                content
+            const ruleId = String(args.rule_id);
+
+            const db = getDb();
+            // Wrap in transaction: verify rule exists before appending removal event.
+            const removeRuleTx = db.transaction(() => {
+              const state = materializeProject(projectId, false);
+              const rule = state.rules[ruleId];
+              if (!rule) {
+                throw new McpError(ErrorCode.InvalidRequest, `Rule with ID "${ruleId}" not found.`);
               }
-            );
-            updateLastEventSeen(String(args.session_id), event.id);
+
+              const event = appendEvent(
+                projectId,
+                String(args.session_id),
+                'RULE_REMOVED',
+                { rule_id: ruleId }
+              );
+              updateLastEventSeen(String(args.session_id), event.id);
+              return { event, ruleContent: rule.content };
+            });
+
+            const { event, ruleContent } = removeRuleTx();
             invalidateProjectCache(projectId);
             return {
               content: [
                 {
                   type: 'text',
-                  text: `Rule removed: "${args.content}" (Event ID: ${event.id})`
+                  text: `Rule "${ruleContent}" (ID: ${ruleId}) removed. (Event ID: ${event.id})`
                 }
               ]
             };
@@ -1002,6 +1100,77 @@ export class ButlerMcpServer {
                 }
               ]
             };
+          }
+
+          case 'todo.list': {
+            const state = materializeProject(projectId, false);
+            const todos = Object.values(state.todos);
+            const filterStatus = args.status as string | undefined;
+
+            const filtered = (!filterStatus || filterStatus === 'all')
+              ? todos
+              : todos.filter(t => t.status === filterStatus);
+
+            // Sort: pending first by id, then completed
+            const sorted = filtered.sort((a, b) => {
+              if (a.status !== b.status) return a.status === 'pending' ? -1 : 1;
+              return a.id - b.id;
+            });
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(sorted, null, 2)
+                }
+              ]
+            };
+          }
+
+          case 'memory.delete': {
+            const memoryId = Number(args.memory_id);
+            if (!Number.isInteger(memoryId) || memoryId <= 0) {
+              throw new McpError(ErrorCode.InvalidParams, 'memory_id must be a positive integer');
+            }
+
+            // Validate session if provided (memory.delete doesn't require a session, matching memory.store)
+            if (args.session_id) {
+              validateSession(projectId, String(args.session_id));
+            }
+
+            const db = getDb();
+            const deleteTx = db.transaction(() => {
+              // Confirm the memory exists and belongs to this project before logging the event
+              const row = db.prepare('SELECT id FROM memories WHERE id = ? AND project_id = ?')
+                .get(memoryId, projectId);
+              if (!row) {
+                throw new McpError(
+                  ErrorCode.InvalidRequest,
+                  `Memory ID ${memoryId} not found in project ${projectId}.`
+                );
+              }
+              // Hard-delete from the memories table (memories are not event-sourced state)
+              deleteMemory(projectId, memoryId);
+              // Append audit event so there is a record of the deletion in the event log
+              const sessionIdForEvent = args.session_id ? String(args.session_id) : 'system';
+              appendEvent(projectId, sessionIdForEvent, 'MEMORY_DELETED', { memory_id: memoryId });
+            });
+
+            deleteTx();
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Memory ID ${memoryId} deleted from project ${projectId}.`
+                }
+              ]
+            };
+          }
+
+          case 'project.list': {
+            // This case is unreachable — project.list is handled before the switch
+            // because it does not require a project_id. Left as a safety fallback.
+            throw new McpError(ErrorCode.InternalError, 'project.list should have been handled before this switch.');
           }
 
           default:

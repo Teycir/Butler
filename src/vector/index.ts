@@ -45,6 +45,18 @@ export function addMemory(
   };
 }
 
+/**
+ * Delete a memory by ID. Returns true if a row was deleted, false if the ID
+ * did not exist or belonged to a different project (prevents cross-project deletion).
+ */
+export function deleteMemory(projectId: string, memoryId: number): boolean {
+  const db = getDb();
+  const result = db.prepare(
+    'DELETE FROM memories WHERE id = ? AND project_id = ?'
+  ).run(memoryId, projectId);
+  return result.changes > 0;
+}
+
 export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
   const db = getDb();
   
