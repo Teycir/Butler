@@ -6,14 +6,59 @@
 
 ---
 
+[![Maturity Status](https://img.shields.io/badge/Status-Active%20Development%20%7C%20Alpha-red.svg)](#)
 [![Local First](https://img.shields.io/badge/Architecture-Local%20First-green.svg)](#)
 [![Protocol](https://img.shields.io/badge/Protocol-MCP%20Native-blue.svg)](#)
 [![Zero-Dependency](https://img.shields.io/badge/Dependency-0--Click%20Indexing-orange.svg)](#)
-[![License](https://img.shields.io/badge/License-MIT-purple.svg)](#)
 
-Butler is a lightweight, local-first, **persistent shared coordination infrastructure** designed for multi-client AI software engineering teams. It allows multiple independent LLM agents (such as Claude Desktop, Cursor, and custom IDE extensions) to safely pair-program, share context, persist memories, and naturally resume development context across editor sessions.
+---
 
-Sessions are temporary. **Projects are permanent.**
+## ⚡ Butler in 3 Minutes
+
+### What is Butler?
+Butler is a lightweight, local-first background coordination engine that registers active AI agents (e.g. Claude Desktop, Cursor, custom IDE tools) and maintains a **shared, event-sourced memory space** directly inside your project repository.
+
+### Why does it exist?
+Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process exits, active context (TODOs, architectural constraints, session differences) is completely lost. When multiple agents run concurrently, they operate in silos, generating race conditions and divergent branches. Butler bridges this gap.
+
+### Who is it for?
+*   **AI Pair Programmers:** Developers working interchangeably across multiple LLM clients (e.g., planning in Claude, implementing in Cursor).
+*   **Multi-Agent Workspaces:** Teams running concurrent background AI workers on the same repository.
+*   **Local-First Advocates:** Engineers seeking zero network leakages and absolute privacy.
+
+### Why not alternatives?
+| Dimension | Butler | Plain Text Files (`context.txt`) | Heavy DBs (Postgres/Redis) |
+| :--- | :--- | :--- | :--- |
+| **Portability** | 0-Click Local SQLite | Hard to version-control safely | Complex Docker setup |
+| **State Conflict** | Optimistic Lock Versions | Prone to complete overrides | Manual locks required |
+| **Recovery** | Ephemeral heartbeats & handoffs | None (static data) | Complex event logs |
+| **Context Size** | Materialized incremental views | Massive raw token bloat | Ad-hoc query builds |
+
+---
+
+## ⏱️ Quickstart in 60 Seconds
+
+### 1. Boot the server and run the test suite:
+```bash
+npm install
+npm test
+```
+
+### 2. Connect to your agent:
+Add this to your Claude Desktop config (e.g., `~/.config/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "butler": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/Butler/src/index.ts"],
+      "env": {
+        "BUTLER_DB_PATH": "/absolute/path/to/Butler/.butler/butler.db"
+      }
+    }
+  }
+}
+```
 
 ---
 
