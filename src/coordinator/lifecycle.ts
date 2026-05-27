@@ -35,12 +35,11 @@ export function registerSession(projectId: string, sessionId: string, clientType
       timestamp: now
     });
 
-    // Preserve last_event_seen from before the session died so handoffs remain accurate
     db.prepare(`
       UPDATE sessions 
-      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?
+      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?, last_event_seen = ?
       WHERE id = ?
-    `).run(now, clientType, projectId, sessionId);
+    `).run(now, clientType, projectId, event.id, sessionId);
   } else {
     db.prepare(`
       INSERT INTO sessions (id, project_id, client_type, status, last_heartbeat, last_event_seen)

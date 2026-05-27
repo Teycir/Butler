@@ -20,14 +20,13 @@ export function addMemory(projectId, type, content, embeddingVector, importance 
 }
 export function getMemories(projectId, limit) {
     const db = getDb();
-    const query = `
+    const rows = db.prepare(`
     SELECT id, project_id, type, content, embedding, importance, created_at
     FROM memories
     WHERE project_id = ?
     ORDER BY id DESC
-    ${limit ? `LIMIT ${limit}` : ''}
-  `;
-    const rows = db.prepare(query).all(projectId);
+    LIMIT ?
+  `).all(projectId, limit ?? -1); // -1 means no limit in SQLite
     return rows.map(r => ({
         id: Number(r.id),
         project_id: r.project_id,

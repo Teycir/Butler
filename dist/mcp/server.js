@@ -3,11 +3,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
 import { appendEvent, getNextSequenceValue } from '../events/store.js';
+import { MEMORY_TYPES } from '../events/types.js';
+import { getDb } from '../db/database.js';
 import { processHeartbeat, registerSession, getActiveSessions, gracefulDisconnect, validateSession, updateLastEventSeen } from '../coordinator/lifecycle.js';
 import { searchMemories, addMemory, getMemories } from '../vector/index.js';
 export class ButlerMcpServer {
     server;
     constructor() {
+        // Note: Butler intentionally has no authentication layer.
+        // Any MCP-connected AI agent can read/write to any project by design.
+        // This is appropriate for local stdio transport where the security boundary
+        // is the user's machine. Project IDs and session IDs are the only identifiers.
         this.server = new Server({
             name: 'butler-mcp',
             version: '1.0.0'
@@ -111,12 +117,14 @@ export class ButlerMcpServer {
                 }
                 case 'memories': {
                     const memoriesList = getMemories(projectId);
+                    // Omit embeddings from response - they're large and not useful to agents
+                    const sanitized = memoriesList.map(({ embedding, ...rest }) => rest);
                     return {
                         contents: [
                             {
                                 uri,
                                 mimeType: 'application/json',
-                                text: JSON.stringify(memoriesList, null, 2)
+                                text: JSON.stringify(sanitized, null, 2)
                             }
                         ]
                     };
@@ -321,6 +329,37 @@ export class ButlerMcpServer {
                         }
                     },
                     {
+                        name: 'todo.update',
+                        description: 'Update a TODO task title, priority, or status with optimistic version checking.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                project_id: { type: 'string', description: 'Unique project identifier' },
+                                session_id: { type: 'string', description: 'Session ID updating the task' },
+                                todo_id: { type: 'number', description: 'ID of the TODO to update' },
+                                version: { type: 'number', description: 'The expected current version of the task' },
+                                title: { type: 'string', description: 'New task title (optional)' },
+                                priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'New priority (optional)' },
+                                status: { type: 'string', enum: ['pending', 'completed'], description: 'New status (optional)' }
+                            },
+                            required: ['project_id', 'session_id', 'todo_id', 'version']
+                        }
+                    },
+                    {
+                        name: 'todo.delete',
+                        description: 'Delete a TODO task with optimistic version checking.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                project_id: { type: 'string', description: 'Unique project identifier' },
+                                session_id: { type: 'string', description: 'Session ID deleting the task' },
+                                todo_id: { type: 'number', description: 'ID of the TODO to delete' },
+                                version: { type: 'number', description: 'The expected current version of the task' }
+                            },
+                            required: ['project_id', 'session_id', 'todo_id', 'version']
+                        }
+                    },
+                    {
                         name: 'wiki.update',
                         description: 'Create or update a repository wiki knowledge base document.',
                         inputSchema: {
@@ -343,6 +382,19 @@ export class ButlerMcpServer {
                                 project_id: { type: 'string', description: 'Unique project identifier' },
                                 session_id: { type: 'string', description: 'Session ID adding the rule' },
                                 content: { type: 'string', description: 'Coding rule text constraint (e.g. Always write JS files using ESM imports)' }
+                            },
+                            required: ['project_id', 'session_id', 'content']
+                        }
+                    },
+                    {
+                        name: 'rule.remove',
+                        description: 'Remove a persistent development guideline rule.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                project_id: { type: 'string', description: 'Unique project identifier' },
+                                session_id: { type: 'string', description: 'Session ID removing the rule' },
+                                content: { type: 'string', description: 'Exact rule text to remove' }
                             },
                             required: ['project_id', 'session_id', 'content']
                         }
@@ -492,6 +544,9 @@ export class ButlerMcpServer {
                         validateSession(projectId, String(args.session_id));
                         const todoId = Number(args.todo_id);
                         const reqVersion = Number(args.version);
+                        // NOTE: This check-then-write pattern is safe only under single-threaded Node.js
+                        // with synchronous better-sqlite3. If Butler gains concurrent request handling
+                        // (e.g., HTTP transport), wrap this in db.transaction() to prevent TOCTOU races.
                         const state = materializeProject(projectId, false);
                         const todo = state.todos[todoId];
                         if (!todo) {
@@ -511,6 +566,61 @@ export class ButlerMcpServer {
                                 {
                                     type: 'text',
                                     text: `Shared TODO ID ${todoId} marked as completed! (Event ID: ${event.id})`
+                                }
+                            ]
+                        };
+                    }
+                    case 'todo.update': {
+                        validateSession(projectId, String(args.session_id));
+                        const todoId = Number(args.todo_id);
+                        const reqVersion = Number(args.version);
+                        const state = materializeProject(projectId, false);
+                        const todo = state.todos[todoId];
+                        if (!todo) {
+                            throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+                        }
+                        if (todo.version !== reqVersion) {
+                            throw new McpError(ErrorCode.InvalidParams, `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`);
+                        }
+                        const event = appendEvent(projectId, String(args.session_id), 'TODO_UPDATED', {
+                            todo_id: todoId,
+                            title: args.title !== undefined ? String(args.title) : undefined,
+                            priority: args.priority,
+                            status: args.status
+                        });
+                        updateLastEventSeen(String(args.session_id), event.id);
+                        invalidateProjectCache(projectId);
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `TODO ID ${todoId} updated! (Event ID: ${event.id})`
+                                }
+                            ]
+                        };
+                    }
+                    case 'todo.delete': {
+                        validateSession(projectId, String(args.session_id));
+                        const todoId = Number(args.todo_id);
+                        const reqVersion = Number(args.version);
+                        const state = materializeProject(projectId, false);
+                        const todo = state.todos[todoId];
+                        if (!todo) {
+                            throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+                        }
+                        if (todo.version !== reqVersion) {
+                            throw new McpError(ErrorCode.InvalidParams, `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`);
+                        }
+                        const event = appendEvent(projectId, String(args.session_id), 'TODO_DELETED', {
+                            todo_id: todoId
+                        });
+                        updateLastEventSeen(String(args.session_id), event.id);
+                        invalidateProjectCache(projectId);
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `TODO ID ${todoId} deleted! (Event ID: ${event.id})`
                                 }
                             ]
                         };
@@ -556,6 +666,23 @@ export class ButlerMcpServer {
                                 {
                                     type: 'text',
                                     text: `Persistent rule recorded: "${args.content}" (Event ID: ${event.id})`
+                                }
+                            ]
+                        };
+                    }
+                    case 'rule.remove': {
+                        validateSession(projectId, String(args.session_id));
+                        const content = String(args.content);
+                        const event = appendEvent(projectId, String(args.session_id), 'RULE_REMOVED', {
+                            content
+                        });
+                        updateLastEventSeen(String(args.session_id), event.id);
+                        invalidateProjectCache(projectId);
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Rule removed: "${args.content}" (Event ID: ${event.id})`
                                 }
                             ]
                         };
@@ -614,9 +741,16 @@ export class ButlerMcpServer {
                         if (content.length > 65536) {
                             throw new McpError(ErrorCode.InvalidParams, 'Memory content exceeds maximum length of 64KB');
                         }
-                        if (!['summary', 'decision', 'rule', 'wiki'].includes(type)) {
-                            throw new McpError(ErrorCode.InvalidParams, `Invalid memory type: ${type}. Must be one of 'summary', 'decision', 'rule', or 'wiki'.`);
+                        if (!MEMORY_TYPES.includes(type)) {
+                            throw new McpError(ErrorCode.InvalidParams, `Invalid memory type: ${type}. Must be one of ${MEMORY_TYPES.map(t => `'${t}'`).join(', ')}.`);
                         }
+                        // Validate session if provided
+                        if (args.session_id) {
+                            validateSession(projectId, String(args.session_id));
+                        }
+                        // Auto-create project if it doesn't exist (like session.register does)
+                        const db = getDb();
+                        db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
                         const mem = addMemory(projectId, type, content, undefined, args.importance !== undefined ? Number(args.importance) : 0.5);
                         return {
                             content: [

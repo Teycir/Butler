@@ -138,6 +138,12 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
       break;
     }
 
+    case 'RULE_REMOVED': {
+      const ruleContent = String(payload.content);
+      updatedState.rules = updatedState.rules.filter(r => r !== ruleContent);
+      break;
+    }
+
     case 'DECISION_RECORDED': {
       const decisionId = String(payload.decision_id);
       const existing = updatedState.decisions[decisionId];

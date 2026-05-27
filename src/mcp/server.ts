@@ -378,6 +378,37 @@ export class ButlerMcpServer {
             }
           },
           {
+            name: 'todo.update',
+            description: 'Update a TODO task title, priority, or status with optimistic version checking.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'Unique project identifier' },
+                session_id: { type: 'string', description: 'Session ID updating the task' },
+                todo_id: { type: 'number', description: 'ID of the TODO to update' },
+                version: { type: 'number', description: 'The expected current version of the task' },
+                title: { type: 'string', description: 'New task title (optional)' },
+                priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'New priority (optional)' },
+                status: { type: 'string', enum: ['pending', 'completed'], description: 'New status (optional)' }
+              },
+              required: ['project_id', 'session_id', 'todo_id', 'version']
+            }
+          },
+          {
+            name: 'todo.delete',
+            description: 'Delete a TODO task with optimistic version checking.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'Unique project identifier' },
+                session_id: { type: 'string', description: 'Session ID deleting the task' },
+                todo_id: { type: 'number', description: 'ID of the TODO to delete' },
+                version: { type: 'number', description: 'The expected current version of the task' }
+              },
+              required: ['project_id', 'session_id', 'todo_id', 'version']
+            }
+          },
+          {
             name: 'wiki.update',
             description: 'Create or update a repository wiki knowledge base document.',
             inputSchema: {
@@ -400,6 +431,19 @@ export class ButlerMcpServer {
                 project_id: { type: 'string', description: 'Unique project identifier' },
                 session_id: { type: 'string', description: 'Session ID adding the rule' },
                 content: { type: 'string', description: 'Coding rule text constraint (e.g. Always write JS files using ESM imports)' }
+              },
+              required: ['project_id', 'session_id', 'content']
+            }
+          },
+          {
+            name: 'rule.remove',
+            description: 'Remove a persistent development guideline rule.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'Unique project identifier' },
+                session_id: { type: 'string', description: 'Session ID removing the rule' },
+                content: { type: 'string', description: 'Exact rule text to remove' }
               },
               required: ['project_id', 'session_id', 'content']
             }
@@ -625,6 +669,91 @@ export class ButlerMcpServer {
             };
           }
 
+          case 'todo.update': {
+            validateSession(projectId, String(args.session_id));
+            const todoId = Number(args.todo_id);
+            const reqVersion = Number(args.version);
+
+            const state = materializeProject(projectId, false);
+            const todo = state.todos[todoId];
+
+            if (!todo) {
+              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+            }
+
+            if (todo.version !== reqVersion) {
+              throw new McpError(
+                ErrorCode.InvalidParams,
+                `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
+              );
+            }
+
+            const event = appendEvent(
+              projectId,
+              String(args.session_id),
+              'TODO_UPDATED',
+              {
+                todo_id: todoId,
+                title: args.title !== undefined ? String(args.title) : undefined,
+                priority: args.priority as 'low' | 'medium' | 'high' | undefined,
+                status: args.status as 'pending' | 'completed' | undefined
+              }
+            );
+
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `TODO ID ${todoId} updated! (Event ID: ${event.id})`
+                }
+              ]
+            };
+          }
+
+          case 'todo.delete': {
+            validateSession(projectId, String(args.session_id));
+            const todoId = Number(args.todo_id);
+            const reqVersion = Number(args.version);
+
+            const state = materializeProject(projectId, false);
+            const todo = state.todos[todoId];
+
+            if (!todo) {
+              throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+            }
+
+            if (todo.version !== reqVersion) {
+              throw new McpError(
+                ErrorCode.InvalidParams,
+                `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
+              );
+            }
+
+            const event = appendEvent(
+              projectId,
+              String(args.session_id),
+              'TODO_DELETED',
+              {
+                todo_id: todoId
+              }
+            );
+
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `TODO ID ${todoId} deleted! (Event ID: ${event.id})`
+                }
+              ]
+            };
+          }
+
           case 'wiki.update': {
             validateSession(projectId, String(args.session_id));
             const content = String(args.content);
@@ -681,6 +810,30 @@ export class ButlerMcpServer {
                 {
                   type: 'text',
                   text: `Persistent rule recorded: "${args.content}" (Event ID: ${event.id})`
+                }
+              ]
+            };
+          }
+
+          case 'rule.remove': {
+            validateSession(projectId, String(args.session_id));
+            const content = String(args.content);
+            
+            const event = appendEvent(
+              projectId,
+              String(args.session_id),
+              'RULE_REMOVED',
+              {
+                content
+              }
+            );
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Rule removed: "${args.content}" (Event ID: ${event.id})`
                 }
               ]
             };
@@ -762,6 +915,11 @@ export class ButlerMcpServer {
                 ErrorCode.InvalidParams,
                 `Invalid memory type: ${type}. Must be one of ${MEMORY_TYPES.map(t => `'${t}'`).join(', ')}.`
               );
+            }
+
+            // Validate session if provided
+            if (args.session_id) {
+              validateSession(projectId, String(args.session_id));
             }
 
             // Auto-create project if it doesn't exist (like session.register does)

@@ -94,6 +94,11 @@ export function projectEvent(state, event) {
             }
             break;
         }
+        case 'RULE_REMOVED': {
+            const ruleContent = String(payload.content);
+            updatedState.rules = updatedState.rules.filter(r => r !== ruleContent);
+            break;
+        }
         case 'DECISION_RECORDED': {
             const decisionId = String(payload.decision_id);
             const existing = updatedState.decisions[decisionId];
@@ -117,6 +122,10 @@ export function projectEvent(state, event) {
                     payload: handoffData,
                     source: event.type === 'HANDOFF_CREATED' ? 'agent' : 'system'
                 });
+                // Cap handoffs to last 50 to prevent unbounded growth in snapshots
+                if (updatedState.handoffs.length > 50) {
+                    updatedState.handoffs = updatedState.handoffs.slice(-50);
+                }
             }
             break;
         }
@@ -134,6 +143,7 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
     if (cached) {
         state = structuredClone(cached.state);
         startEventId = cached.lastEventId;
+        lastSnapshotEventId = cached.lastSnapshotEventId;
     }
     else {
         const latestSnapshot = getLatestSnapshot(projectId);
@@ -155,16 +165,18 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
         state = projectEvent(state, event);
         eventCount++;
     }
-    projectCache.set(projectId, {
-        state: structuredClone(state),
-        lastEventId: state.lastEventId
-    });
     // Snapshot trigger: check events since last snapshot, not just events in this call
     if (triggerSnapshotCheck && state.lastEventId > 0) {
         const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
         if (eventsSinceSnapshot >= 100) {
             createSnapshot(projectId, state.lastEventId, state);
+            lastSnapshotEventId = state.lastEventId;
         }
     }
+    projectCache.set(projectId, {
+        state: structuredClone(state),
+        lastEventId: state.lastEventId,
+        lastSnapshotEventId: lastSnapshotEventId
+    });
     return state;
 }

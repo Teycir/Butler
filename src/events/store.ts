@@ -109,11 +109,16 @@ export function createSnapshot(projectId: string, eventId: number, state: Record
     VALUES (?, ?, ?, ?)
   `).run(projectId, eventId, stateStr, now);
   
-  // Delete old snapshots to prevent unbounded growth
+  // Keep last 3 snapshots for recovery fallback
   db.prepare(`
     DELETE FROM snapshots 
-    WHERE project_id = ? AND event_id < ?
-  `).run(projectId, eventId);
+    WHERE project_id = ? AND event_id NOT IN (
+      SELECT event_id FROM snapshots 
+      WHERE project_id = ? 
+      ORDER BY event_id DESC 
+      LIMIT 3
+    )
+  `).run(projectId, projectId);
 }
 
 export interface SnapshotRecord {

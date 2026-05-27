@@ -6,10 +6,8 @@ export function registerSession(projectId, sessionId, clientType) {
     const db = getDb();
     const now = Math.floor(Date.now() / 1000);
     // Verify/Insert project if not exists to satisfy foreign key constraints
-    const projectCheck = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
-    if (!projectCheck) {
-        db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
-    }
+    // Use INSERT OR IGNORE to avoid race condition on concurrent session registration
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
     // Check if session exists using explicit columns
     const existing = db.prepare(`
     SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen 
@@ -117,6 +115,7 @@ export function updateLastEventSeen(sessionId, eventId) {
   `).run(eventId, sessionId);
 }
 export function gracefulDisconnect(projectId, sessionId) {
+    validateSession(projectId, sessionId);
     const db = getDb();
     const now = Math.floor(Date.now() / 1000);
     const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
@@ -196,12 +195,18 @@ export function startLifecycleMonitor(checkIntervalMs = 15000) {
       FROM sessions
       WHERE status = 'alive' AND (? - last_heartbeat) > 60
     `).all(now);
+        const staleTransition = db.transaction(() => {
+            for (const row of staleRows) {
+                db.prepare(`UPDATE sessions SET status = 'stale' WHERE id = ?`).run(row.id);
+                appendEvent(row.project_id, row.id, 'SESSION_STALE', {
+                    session_id: row.id,
+                    timestamp: now
+                });
+            }
+        });
+        staleTransition();
+        // Invalidate caches after transaction commits
         for (const row of staleRows) {
-            db.prepare(`UPDATE sessions SET status = 'stale' WHERE id = ?`).run(row.id);
-            appendEvent(row.project_id, row.id, 'SESSION_STALE', {
-                session_id: row.id,
-                timestamp: now
-            });
             invalidateProjectCache(row.project_id);
         }
         // 2. Sessions transitioning to DEAD (300s / 5m)
@@ -210,16 +215,22 @@ export function startLifecycleMonitor(checkIntervalMs = 15000) {
       FROM sessions
       WHERE status = 'stale' AND (? - last_heartbeat) > 300
     `).all(now);
+        const deadTransition = db.transaction(() => {
+            for (const row of deadRows) {
+                db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(row.id);
+                const handoff = generateStructuredHandoff(row.project_id, row.id, 'ungraceful');
+                const event = appendEvent(row.project_id, row.id, 'SESSION_DISCONNECTED', {
+                    session_id: row.id,
+                    timestamp: now,
+                    reason: 'heartbeat_timeout',
+                    handoff
+                });
+                updateLastEventSeen(row.id, event.id);
+            }
+        });
+        deadTransition();
+        // Invalidate caches after transaction commits
         for (const row of deadRows) {
-            db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(row.id);
-            const handoff = generateStructuredHandoff(row.project_id, row.id, 'ungraceful');
-            const event = appendEvent(row.project_id, row.id, 'SESSION_DISCONNECTED', {
-                session_id: row.id,
-                timestamp: now,
-                reason: 'heartbeat_timeout',
-                handoff
-            });
-            updateLastEventSeen(row.id, event.id);
             invalidateProjectCache(row.project_id);
         }
         // 3. Periodic snapshot check: Trigger snapshot checkpoint every 30 minutes (1800s)
