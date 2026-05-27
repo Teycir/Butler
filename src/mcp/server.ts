@@ -18,6 +18,7 @@ import {
 } from '../events/materializer.js';
 import { appendEvent, getNextSequenceValue } from '../events/store.js';
 import { MEMORY_TYPES } from '../events/types.js';
+import { getDb } from '../db/database.js';
 import { 
   processHeartbeat, 
   registerSession, 
@@ -155,12 +156,14 @@ export class ButlerMcpServer {
 
         case 'memories': {
           const memoriesList = getMemories(projectId);
+          // Omit embeddings from response - they're large and not useful to agents
+          const sanitized = memoriesList.map(({ embedding, ...rest }) => rest);
           return {
             contents: [
               {
                 uri,
                 mimeType: 'application/json',
-                text: JSON.stringify(memoriesList, null, 2)
+                text: JSON.stringify(sanitized, null, 2)
               }
             ]
           };
@@ -582,6 +585,9 @@ export class ButlerMcpServer {
             const todoId = Number(args.todo_id);
             const reqVersion = Number(args.version);
 
+            // NOTE: This check-then-write pattern is safe only under single-threaded Node.js
+            // with synchronous better-sqlite3. If Butler gains concurrent request handling
+            // (e.g., HTTP transport), wrap this in db.transaction() to prevent TOCTOU races.
             const state = materializeProject(projectId, false);
             const todo = state.todos[todoId];
 
@@ -757,6 +763,10 @@ export class ButlerMcpServer {
                 `Invalid memory type: ${type}. Must be one of ${MEMORY_TYPES.map(t => `'${t}'`).join(', ')}.`
               );
             }
+
+            // Auto-create project if it doesn't exist (like session.register does)
+            const db = getDb();
+            db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
 
             const mem = addMemory(
               projectId,

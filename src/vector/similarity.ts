@@ -80,11 +80,14 @@ export function searchSparse(
 
   const numDocs = documents.length;
   
+  // Tokenize all documents once upfront
+  const docTokens = documents.map(doc => tokenize(doc.content));
+  
   // Calculate Document Frequency (DF)
   const df: Record<string, number> = {};
-  for (const doc of documents) {
-    const terms = new Set(tokenize(doc.content));
-    for (const term of terms) {
+  for (const terms of docTokens) {
+    const uniqueTerms = new Set(terms);
+    for (const term of uniqueTerms) {
       df[term] = (df[term] || 0) + 1;
     }
   }
@@ -98,8 +101,8 @@ export function searchSparse(
   }
 
   // Score each document
-  const scored = documents.map(doc => {
-    const docTerms = tokenize(doc.content);
+  const scored = documents.map((doc, idx) => {
+    const docTerms = docTokens[idx];
     
     // Term frequencies
     const tf: Record<string, number> = {};

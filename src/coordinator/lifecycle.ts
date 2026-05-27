@@ -35,11 +35,12 @@ export function registerSession(projectId: string, sessionId: string, clientType
       timestamp: now
     });
 
+    // Preserve last_event_seen from before the session died so handoffs remain accurate
     db.prepare(`
       UPDATE sessions 
-      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?, last_event_seen = ?
+      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?
       WHERE id = ?
-    `).run(now, clientType, projectId, event.id, sessionId);
+    `).run(now, clientType, projectId, sessionId);
   } else {
     db.prepare(`
       INSERT INTO sessions (id, project_id, client_type, status, last_heartbeat, last_event_seen)
@@ -256,10 +257,14 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
           session_id: row.id,
           timestamp: now
         });
-        invalidateProjectCache(row.project_id);
       }
     });
     staleTransition();
+    
+    // Invalidate caches after transaction commits
+    for (const row of staleRows) {
+      invalidateProjectCache(row.project_id);
+    }
 
     // 2. Sessions transitioning to DEAD (300s / 5m)
     const deadRows = db.prepare(`
@@ -282,10 +287,14 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
         });
         
         updateLastEventSeen(row.id, event.id);
-        invalidateProjectCache(row.project_id);
       }
     });
     deadTransition();
+    
+    // Invalidate caches after transaction commits
+    for (const row of deadRows) {
+      invalidateProjectCache(row.project_id);
+    }
 
     // 3. Periodic snapshot check: Trigger snapshot checkpoint every 30 minutes (1800s)
     if (now - lastSnapshotTime >= 1800) {
