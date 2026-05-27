@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { initDatabase, closeDatabase } from '../src/db/database.js';
 import { appendEvent, getNextSequenceValue } from '../src/events/store.js';
 import { materializeProject, invalidateProjectCache } from '../src/events/materializer.js';
@@ -255,7 +256,7 @@ async function runTests() {
   let ruleBId: string;
 
   await test('RULE_ADDED event stores rule with rule_id', () => {
-    const { randomUUID } = await import('crypto');
+
     ruleAId = randomUUID();
     ruleBId = randomUUID();
 
@@ -277,7 +278,7 @@ async function runTests() {
   });
 
   await test('RULE_REMOVED for non-existent ID leaves state unchanged', () => {
-    const { randomUUID } = await import('crypto');
+
     const before = materializeProject(PROJECT_ID, false);
     const countBefore = Object.keys(before.rules).length;
     // Appending a RULE_REMOVED for an unknown ID should be a no-op in the materializer
@@ -289,7 +290,7 @@ async function runTests() {
   await test('Two rules with same content have independent IDs', () => {
     // The event store itself doesn't enforce dedup — that's the server layer's job.
     // At the materializer level, two rules with different IDs but same content both exist.
-    const { randomUUID } = await import('crypto');
+
     const dupId = randomUUID();
     appendEvent(PROJECT_ID, CLIENT_A, 'RULE_ADDED', { rule_id: dupId, content: RULE_CONTENT_B });
     const state = materializeProject(PROJECT_ID, false);
@@ -466,7 +467,7 @@ async function runTests() {
   });
 
   await test('Rules in PROJECT_B do not appear in PROJECT_ID', () => {
-    const { randomUUID } = await import('crypto');
+
     const ruleId = randomUUID();
     appendEvent(PROJECT_B, 'agent-b', 'RULE_ADDED', { rule_id: ruleId, content: 'B-only rule' });
     invalidateProjectCache(PROJECT_ID);
@@ -488,7 +489,7 @@ async function runTests() {
     // Force a cold cache read with triggerSnapshotCheck=true after adding many events
     invalidateProjectCache(PROJECT_ID);
     // We need 100 new events since last snapshot. Seed them via rules (cheapest event type).
-    const { randomUUID } = await import('crypto');
+
     for (let i = 0; i < 105; i++) {
       appendEvent(PROJECT_ID, CLIENT_A, 'RULE_ADDED', { rule_id: randomUUID(), content: `Snapshot-test rule ${i}` });
     }
