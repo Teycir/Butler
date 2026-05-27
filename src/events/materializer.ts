@@ -1,4 +1,4 @@
-import { EventRecord } from './types.js';
+import { EventRecord, HandoffPayload } from './types.js';
 import { getEvents, getLatestSnapshot, createSnapshot } from './store.js';
 
 export interface TodoItem {
@@ -29,7 +29,7 @@ export interface ProjectState {
   wiki: Record<string, WikiPage>;
   rules: string[];
   decisions: Record<string, DecisionItem>;
-  handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: any; source?: 'agent' | 'system' }>;
+  handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: HandoffPayload; source?: 'agent' | 'system' }>;
   lastEventId: number;
 }
 
@@ -215,20 +215,21 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     state = projectEvent(state, event);
   }
 
-  // Snapshot trigger: check events since last snapshot, not just events in this call
+  // Snapshot trigger: check count of events since last snapshot
   if (triggerSnapshotCheck && state.lastEventId > 0) {
-    const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
+    const eventsSinceSnapshot = events.length + (startEventId - lastSnapshotEventId);
     if (eventsSinceSnapshot >= 100) {
       createSnapshot(projectId, state.lastEventId, state);
       lastSnapshotEventId = state.lastEventId;
     }
   }
 
+  const clonedState = structuredClone(state);
   projectCache.set(projectId, {
-    state: structuredClone(state),
+    state: clonedState,
     lastEventId: state.lastEventId,
     lastSnapshotEventId: lastSnapshotEventId
   });
 
-  return structuredClone(state);
+  return clonedState;
 }

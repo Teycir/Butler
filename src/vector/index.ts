@@ -1,5 +1,5 @@
 import { getDb } from '../db/database.js';
-import { MEMORY_TYPES, MemoryType } from '../events/types.js';
+import { MemoryType } from '../events/types.js';
 import {
   bufferToVector,
   vectorToBuffer,

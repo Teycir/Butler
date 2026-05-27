@@ -161,7 +161,7 @@ export class ButlerMcpServer {
                         for (const h of handoffs) {
                             const sourceLabel = h.source === 'agent' ? '📝 Agent-Narrated' : '🤖 System-Generated';
                             markdownContext += `### ${sourceLabel} Handoff from ${h.session_id} (${new Date(h.timestamp * 1000).toISOString()})\n`;
-                            markdownContext += `${h.summary}\n`;
+                            markdownContext += `> ${h.summary.replace(/\n/g, '\n> ')}\n`;
                             if (h.payload.completed_todos?.length > 0) {
                                 markdownContext += `**Completed:** ${h.payload.completed_todos.join(', ')}\n`;
                             }
@@ -171,10 +171,10 @@ export class ButlerMcpServer {
                             if (h.payload.recent_decisions?.length > 0) {
                                 markdownContext += `**Decisions:** ${h.payload.recent_decisions.join(', ')}\n`;
                             }
-                            if (h.payload.rules_added?.length > 0) {
+                            if (h.payload.rules_added && h.payload.rules_added.length > 0) {
                                 markdownContext += `**Rules Added:** ${h.payload.rules_added.join(', ')}\n`;
                             }
-                            if (h.payload.wiki_updated?.length > 0) {
+                            if (h.payload.wiki_updated && h.payload.wiki_updated.length > 0) {
                                 markdownContext += `**Wiki Updated:** ${h.payload.wiki_updated.join(', ')}\n`;
                             }
                             markdownContext += `\n`;

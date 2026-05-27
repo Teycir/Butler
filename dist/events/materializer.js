@@ -163,18 +163,19 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
     for (const event of events) {
         state = projectEvent(state, event);
     }
-    // Snapshot trigger: check events since last snapshot, not just events in this call
+    // Snapshot trigger: check count of events since last snapshot
     if (triggerSnapshotCheck && state.lastEventId > 0) {
-        const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
+        const eventsSinceSnapshot = events.length + (startEventId - lastSnapshotEventId);
         if (eventsSinceSnapshot >= 100) {
             createSnapshot(projectId, state.lastEventId, state);
             lastSnapshotEventId = state.lastEventId;
         }
     }
+    const clonedState = structuredClone(state);
     projectCache.set(projectId, {
-        state: structuredClone(state),
+        state: clonedState,
         lastEventId: state.lastEventId,
         lastSnapshotEventId: lastSnapshotEventId
     });
-    return structuredClone(state);
+    return clonedState;
 }
