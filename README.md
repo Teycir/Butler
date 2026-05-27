@@ -47,16 +47,19 @@ npm install
 npm test
 ```
 
-### 2. Connect to your agent:
-Add this to your Claude Desktop config (e.g., `~/.config/Claude/claude_desktop_config.json`):
+### 2. Build and connect to your agent:
+```bash
+npm run build
+```
+Then add this to your Claude Desktop config (e.g., `~/.config/Claude/claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
     "butler": {
-      "command": "npx",
-      "args": ["tsx", "/absolute/path/to/Butler/src/index.ts"],
+      "command": "node",
+      "args": ["/absolute/path/to/Butler/dist/index.js"],
       "env": {
-        "BUTLER_DB_PATH": "/absolute/path/to/Butler/.butler/butler.db"
+        "BUTLER_DB_PATH": ".butler/butler.db"
       }
     }
   }
@@ -96,7 +99,7 @@ Butler bridges this gap by acting as a local, background **Durable Project Memor
 To understand Butler in under two minutes, here are our core conceptual models:
 
 *   **Project:** The permanent codebase workspace. Lives forever, anchored by a local-first SQLite file (`.butler/butler.db`).
-*   **Session:** An ephemeral window of activity by a specific AI client (e.g. `claude-3.5-sonnet`). Sessions send periodic heartbeats to prove presence.
+*   **Session:** An ephemeral window of activity by a specific AI client (e.g. `cursor-1`, `claude-desktop-2`). Sessions send periodic heartbeats to prove presence.
 *   **Event:** An append-only, immutable transaction log entry representing a discrete state change (e.g. `TODO_CREATED`, `RULE_ADDED`, `WIKI_UPDATED`). **Events are the ground truth.**
 *   **State:** A materialized cache of the project's current status (active tasks, wiki pages, rules) constructed incrementally by playing events. **State is the cache.**
 *   **Handoff:** A structured, context-rich handoff payload generated when a session disconnects, capturing exact achievements and pending blockers.
@@ -124,7 +127,7 @@ graph TD
         COOR[💓 Session Coordinator & Heartbeats]
         EVSTORE[📝 Event Store / Append-Only Log]
         CACHE[⚡ Incremental Materialization Cache]
-        VEC[🔍 Pure-JS TF-IDF Vector Memory Engine]
+        VEC[🔍 Pure-JS TF-IDF Memory Engine]
     end
 
     subgraph Storage
@@ -136,10 +139,9 @@ graph TD
     MCP --> DISP
     DISP --> COOR
     DISP --> EVSTORE
-    EVSTORE --> CACHE
     EVSTORE -->|WAL Transaction| DB
-    CACHE --> VEC
-    VEC --> DB
+    DB -->|replay on read| CACHE
+    DB --> VEC
 ```
 
 ---
@@ -181,10 +183,10 @@ Add Butler as an MCP server in your Claude Desktop configuration file (e.g. `~/.
 {
   "mcpServers": {
     "butler": {
-      "command": "npx",
-      "args": ["tsx", "/absolute/path/to/Butler/src/index.ts"],
+      "command": "node",
+      "args": ["/absolute/path/to/Butler/dist/index.js"],
       "env": {
-        "BUTLER_DB_PATH": "/absolute/path/to/Butler/.butler/butler.db"
+        "BUTLER_DB_PATH": ".butler/butler.db"
       }
     }
   }
@@ -196,9 +198,10 @@ Add Butler as an MCP server in your Claude Desktop configuration file (e.g. `~/.
 ## 🔌 API & Tool Surface
 
 ### 1. Resources
-*   `butler://projects/{projectId}/context`: Unified markdown context packet containing TODOs, rules, wiki pages, and active sessions.
+*   `butler://projects/{projectId}/context`: Unified markdown context packet containing TODOs, rules, wiki pages, active sessions, and recent handoffs.
 *   `butler://projects/{projectId}/todos`: Materialized active task list.
 *   `butler://projects/{projectId}/wiki`: Shared wiki and reference documents.
+*   `butler://projects/{projectId}/sessions`: Active and stale session registry.
 *   `butler://projects/{projectId}/memories`: Complete universal project memory log.
 
 ### 2. Core Tools
@@ -206,8 +209,11 @@ Add Butler as an MCP server in your Claude Desktop configuration file (e.g. `~/.
 *   `session.heartbeat`: Periodically signal presence (every 15s).
 *   `session.disconnect`: Gracefully disconnect and broadcast a structured continuity handoff.
 *   `todo.add` / `todo.complete`: Add and complete tasks with optimistic version locking.
-*   `rule.add` / `decision.record` / `wiki.update`: Inject rules, architectural design records, and wiki pages.
-*   `memory.store` / `memory.search`: Search history using hybrid TF-IDF keyword vector ranking.
+*   `wiki.update`: Create or update a wiki knowledge base page.
+*   `rule.add`: Add a persistent coding guideline all agents must follow.
+*   `decision.record`: Log an architectural decision record (ADR).
+*   `handoff.create`: Explicitly broadcast a session handoff with accomplishments and pending work.
+*   `memory.store` / `memory.search`: Store and search project memory using hybrid TF-IDF keyword ranking.
 
 ---
 
