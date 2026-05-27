@@ -155,21 +155,25 @@ export function gracefulDisconnect(projectId: string, sessionId: string): void {
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   
-  const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
+  const disconnectTx = db.transaction(() => {
+    const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
 
-  const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
-    session_id: sessionId,
-    timestamp: now,
-    handoff: handoff
+    const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
+      session_id: sessionId,
+      timestamp: now,
+      handoff: handoff
+    });
+
+    updateLastEventSeen(sessionId, event.id);
+    
+    db.prepare(`
+      UPDATE sessions 
+      SET status = 'dead', last_heartbeat = ?
+      WHERE id = ?
+    `).run(now, sessionId);
   });
-
-  updateLastEventSeen(sessionId, event.id);
   
-  db.prepare(`
-    UPDATE sessions 
-    SET status = 'dead', last_heartbeat = ?
-    WHERE id = ?
-  `).run(now, sessionId);
+  disconnectTx();
 }
 
 export function generateStructuredHandoff(
@@ -184,7 +188,8 @@ export function generateStructuredHandoff(
   const sessionEvents = getSessionEvents(projectId, sessionId, sinceEventId);
 
   const completedTodos: string[] = [];
-  const createdTodos: string[] = [];
+  const createdTodoIds = new Set<number>();
+  const completedTodoIds = new Set<number>();
   const rulesAdded: string[] = [];
   const decisionsRecorded: string[] = [];
   const wikiUpdated: string[] = [];
@@ -200,9 +205,10 @@ export function generateStructuredHandoff(
     switch (event.type) {
       case 'TODO_COMPLETED':
         completedTodos.push(`TODO ID ${payload.todo_id}`);
+        completedTodoIds.add(Number(payload.todo_id));
         break;
       case 'TODO_CREATED':
-        createdTodos.push(`"${payload.title}" (ID ${payload.todo_id})`);
+        createdTodoIds.add(Number(payload.todo_id));
         break;
       case 'RULE_ADDED':
         rulesAdded.push(payload.content);
@@ -216,6 +222,10 @@ export function generateStructuredHandoff(
     }
   }
 
+  // Pending TODOs = created but not completed in this session
+  const pendingTodoIds = [...createdTodoIds].filter(id => !completedTodoIds.has(id));
+  const pendingTodos = pendingTodoIds.map(id => `TODO ID ${id}`);
+
   const summary = type === 'graceful'
     ? `Graceful end of session for agent ${sessionId}.`
     : `Session ${sessionId} lost connection (missed heartbeat). Auto-generated continuity marker.`;
@@ -223,7 +233,7 @@ export function generateStructuredHandoff(
   return {
     session_id: sessionId,
     completed_todos: completedTodos,
-    pending_todos: createdTodos,
+    pending_todos: pendingTodos,
     recent_decisions: decisionsRecorded,
     rules_added: rulesAdded,
     wiki_updated: wikiUpdated,
@@ -233,10 +243,11 @@ export function generateStructuredHandoff(
 }
 
 let lifecycleTimer: NodeJS.Timeout | null = null;
-let lastSnapshotTime: number = Math.floor(Date.now() / 1000);
 
 export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
   if (lifecycleTimer) return;
+
+  let lastSnapshotTime: number = Math.floor(Date.now() / 1000);
 
   lifecycleTimer = setInterval(() => {
     const db = getDb();
@@ -269,7 +280,7 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
     const deadRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
       FROM sessions
-      WHERE status = 'stale' AND (? - last_heartbeat) > 300
+      WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > 300
     `).all(now) as any[];
 
     const deadTransition = db.transaction(() => {

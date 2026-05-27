@@ -118,18 +118,21 @@ export function gracefulDisconnect(projectId, sessionId) {
     validateSession(projectId, sessionId);
     const db = getDb();
     const now = Math.floor(Date.now() / 1000);
-    const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
-    const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
-        session_id: sessionId,
-        timestamp: now,
-        handoff: handoff
+    const disconnectTx = db.transaction(() => {
+        const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
+        const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
+            session_id: sessionId,
+            timestamp: now,
+            handoff: handoff
+        });
+        updateLastEventSeen(sessionId, event.id);
+        db.prepare(`
+      UPDATE sessions 
+      SET status = 'dead', last_heartbeat = ?
+      WHERE id = ?
+    `).run(now, sessionId);
     });
-    updateLastEventSeen(sessionId, event.id);
-    db.prepare(`
-    UPDATE sessions 
-    SET status = 'dead', last_heartbeat = ?
-    WHERE id = ?
-  `).run(now, sessionId);
+    disconnectTx();
 }
 export function generateStructuredHandoff(projectId, sessionId, type) {
     const sess = getSession(sessionId);
@@ -137,7 +140,8 @@ export function generateStructuredHandoff(projectId, sessionId, type) {
     // Fetch only events since last checkpoint for this session
     const sessionEvents = getSessionEvents(projectId, sessionId, sinceEventId);
     const completedTodos = [];
-    const createdTodos = [];
+    const createdTodoIds = new Set();
+    const completedTodoIds = new Set();
     const rulesAdded = [];
     const decisionsRecorded = [];
     const wikiUpdated = [];
@@ -152,9 +156,10 @@ export function generateStructuredHandoff(projectId, sessionId, type) {
         switch (event.type) {
             case 'TODO_COMPLETED':
                 completedTodos.push(`TODO ID ${payload.todo_id}`);
+                completedTodoIds.add(Number(payload.todo_id));
                 break;
             case 'TODO_CREATED':
-                createdTodos.push(`"${payload.title}" (ID ${payload.todo_id})`);
+                createdTodoIds.add(Number(payload.todo_id));
                 break;
             case 'RULE_ADDED':
                 rulesAdded.push(payload.content);
@@ -167,13 +172,16 @@ export function generateStructuredHandoff(projectId, sessionId, type) {
                 break;
         }
     }
+    // Pending TODOs = created but not completed in this session
+    const pendingTodoIds = [...createdTodoIds].filter(id => !completedTodoIds.has(id));
+    const pendingTodos = pendingTodoIds.map(id => `TODO ID ${id}`);
     const summary = type === 'graceful'
         ? `Graceful end of session for agent ${sessionId}.`
         : `Session ${sessionId} lost connection (missed heartbeat). Auto-generated continuity marker.`;
     return {
         session_id: sessionId,
         completed_todos: completedTodos,
-        pending_todos: createdTodos,
+        pending_todos: pendingTodos,
         recent_decisions: decisionsRecorded,
         rules_added: rulesAdded,
         wiki_updated: wikiUpdated,
@@ -182,10 +190,10 @@ export function generateStructuredHandoff(projectId, sessionId, type) {
     };
 }
 let lifecycleTimer = null;
-let lastSnapshotTime = Math.floor(Date.now() / 1000);
 export function startLifecycleMonitor(checkIntervalMs = 15000) {
     if (lifecycleTimer)
         return;
+    let lastSnapshotTime = Math.floor(Date.now() / 1000);
     lifecycleTimer = setInterval(() => {
         const db = getDb();
         const now = Math.floor(Date.now() / 1000);
@@ -213,7 +221,7 @@ export function startLifecycleMonitor(checkIntervalMs = 15000) {
         const deadRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
       FROM sessions
-      WHERE status = 'stale' AND (? - last_heartbeat) > 300
+      WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > 300
     `).all(now);
         const deadTransition = db.transaction(() => {
             for (const row of deadRows) {

@@ -141,7 +141,7 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
     let startEventId = 0;
     let lastSnapshotEventId = 0;
     if (cached) {
-        state = structuredClone(cached.state);
+        state = cached.state;
         startEventId = cached.lastEventId;
         lastSnapshotEventId = cached.lastSnapshotEventId;
     }
@@ -160,10 +160,8 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
         }
     }
     const events = getEvents(projectId, startEventId);
-    let eventCount = 0;
     for (const event of events) {
         state = projectEvent(state, event);
-        eventCount++;
     }
     // Snapshot trigger: check events since last snapshot, not just events in this call
     if (triggerSnapshotCheck && state.lastEventId > 0) {
