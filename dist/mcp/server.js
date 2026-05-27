@@ -197,6 +197,9 @@ export class ButlerMcpServer {
                         for (const t of completed.slice(-5)) { // Show last 5 completed
                             markdownContext += `- [x] [ID ${t.id}] **${t.title}** (Version: ${t.version})\n`;
                         }
+                        if (completed.length > 5) {
+                            markdownContext += `\n_...and ${completed.length - 5} more completed task(s)._\n`;
+                        }
                     }
                     markdownContext += `\n`;
                     markdownContext += `## 📜 Materialized Shared Rules\n`;
@@ -270,7 +273,7 @@ export class ButlerMcpServer {
                             type: 'object',
                             properties: {
                                 project_id: { type: 'string', description: 'Unique project identifier' },
-                                session_id: { type: 'string', description: 'Unique session identifier (e.g. cursor-1, claude-desktop-2)' },
+                                session_id: { type: 'string', description: 'Unique session identifier. Must contain only alphanumeric characters, underscores, and hyphens (e.g. cursor-1, claude-desktop-2, kiro_cli_4)' },
                                 client_type: { type: 'string', description: 'Client description (e.g., Cursor, Claude Desktop)' }
                             },
                             required: ['project_id', 'session_id', 'client_type']
@@ -551,6 +554,9 @@ export class ButlerMcpServer {
                         const todo = state.todos[todoId];
                         if (!todo) {
                             throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+                        }
+                        if (todo.status === 'completed') {
+                            throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} is already completed.`);
                         }
                         if (todo.version !== reqVersion) {
                             throw new McpError(ErrorCode.InvalidParams, `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`);

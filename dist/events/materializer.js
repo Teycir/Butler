@@ -176,5 +176,5 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
         lastEventId: state.lastEventId,
         lastSnapshotEventId: lastSnapshotEventId
     });
-    return state;
+    return structuredClone(state);
 }

@@ -121,6 +121,10 @@ export function gracefulDisconnect(projectId, sessionId) {
     const db = getDb();
     const now = Math.floor(Date.now() / 1000);
     const disconnectTx = db.transaction(() => {
+        // NOTE: generateStructuredHandoff reads from the DB (getSession, getSessionEvents)
+        // inside this write transaction. This is safe and intentional: it reads last_event_seen
+        // from the session's *previous* checkpoint (before the UPDATE below), which is the
+        // correct boundary for determining which events belong to this session's final handoff.
         const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
         const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
             session_id: sessionId,
