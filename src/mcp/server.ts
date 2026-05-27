@@ -21,7 +21,9 @@ import {
   processHeartbeat, 
   registerSession, 
   getActiveSessions, 
-  gracefulDisconnect 
+  gracefulDisconnect,
+  validateSession,
+  updateLastEventSeen
 } from '../coordinator/lifecycle.js';
 import { searchMemories, addMemory, getMemories } from '../vector/index.js';
 
@@ -55,7 +57,7 @@ export class ButlerMcpServer {
             uri: 'butler://projects/{projectId}/context',
             name: 'Project Unified Context',
             description: 'A consolidated active context packet containing TODOs, rules, wiki pages, and active sessions.',
-            mimeType: 'application/json'
+            mimeType: 'text/markdown'
           },
           {
             uri: 'butler://projects/{projectId}/todos',
@@ -96,10 +98,18 @@ export class ButlerMcpServer {
       }
 
       const [, projectId, resourceType] = match;
-      const state = materializeProject(projectId, false);
+      
+      // Validate project ID format
+      if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.`
+        );
+      }
 
       switch (resourceType) {
         case 'todos': {
+          const state = materializeProject(projectId, false);
           const todosList = Object.values(state.todos);
           return {
             contents: [
@@ -113,6 +123,7 @@ export class ButlerMcpServer {
         }
 
         case 'wiki': {
+          const state = materializeProject(projectId, false);
           return {
             contents: [
               {
@@ -151,23 +162,60 @@ export class ButlerMcpServer {
         }
 
         case 'context': {
+          const state = materializeProject(projectId, false);
           const sessions = getActiveSessions(projectId);
           const todos = Object.values(state.todos);
           const wiki = Object.values(state.wiki);
           const decisions = Object.values(state.decisions);
+          const handoffs = state.handoffs.slice(-5); // Last 5 handoffs
 
           // Build a beautiful unified markdown context packet for zero-click context hydration!
           let markdownContext = `# butler: Unified Project Context [Project: ${projectId}]\n\n`;
 
+          const aliveSessions = sessions.filter(s => s.status === 'alive');
+          const staleSessions = sessions.filter(s => s.status === 'stale');
+
           markdownContext += `## 👥 Active Live Sessions\n`;
-          if (sessions.length === 0) {
+          if (aliveSessions.length === 0) {
             markdownContext += `- No active agent sessions detected.\n`;
           } else {
-            for (const s of sessions) {
-              markdownContext += `- **${s.id}** (${s.client_type}) - Status: \`${s.status}\` (Last Heartbeat: ${new Date(s.last_heartbeat * 1000).toISOString()})\n`;
+            for (const s of aliveSessions) {
+              markdownContext += `- **${s.id}** (${s.client_type}) - Last Heartbeat: ${new Date(s.last_heartbeat * 1000).toISOString()}\n`;
+            }
+          }
+          
+          if (staleSessions.length > 0) {
+            markdownContext += `\n### ⚠️ Stale Sessions (Possibly Disconnected)\n`;
+            for (const s of staleSessions) {
+              markdownContext += `- **${s.id}** (${s.client_type}) - Last Heartbeat: ${new Date(s.last_heartbeat * 1000).toISOString()}\n`;
             }
           }
           markdownContext += `\n`;
+
+          if (handoffs.length > 0) {
+            markdownContext += `## 🔄 Recent Session Handoffs\n`;
+            for (const h of handoffs) {
+              const sourceLabel = (h as any).source === 'agent' ? '📝 Agent-Narrated' : '🤖 System-Generated';
+              markdownContext += `### ${sourceLabel} Handoff from ${h.session_id} (${new Date(h.timestamp * 1000).toISOString()})\n`;
+              markdownContext += `${h.summary}\n`;
+              if (h.payload.completed_todos?.length > 0) {
+                markdownContext += `**Completed:** ${h.payload.completed_todos.join(', ')}\n`;
+              }
+              if (h.payload.pending_todos?.length > 0) {
+                markdownContext += `**Pending:** ${h.payload.pending_todos.join(', ')}\n`;
+              }
+              if (h.payload.recent_decisions?.length > 0) {
+                markdownContext += `**Decisions:** ${h.payload.recent_decisions.join(', ')}\n`;
+              }
+              if (h.payload.rules_added?.length > 0) {
+                markdownContext += `**Rules Added:** ${h.payload.rules_added.join(', ')}\n`;
+              }
+              if (h.payload.wiki_updated?.length > 0) {
+                markdownContext += `**Wiki Updated:** ${h.payload.wiki_updated.join(', ')}\n`;
+              }
+              markdownContext += `\n`;
+            }
+          }
 
           markdownContext += `## 🎯 Shared TODOs / Task List\n`;
           const pending = todos.filter(t => t.status === 'pending');
@@ -222,6 +270,7 @@ export class ButlerMcpServer {
           const rawData = {
             project_id: projectId,
             active_sessions: sessions,
+            handoffs,
             open_todos: pending,
             rules: state.rules,
             decisions,
@@ -414,7 +463,40 @@ export class ButlerMcpServer {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name;
       const args = request.params.arguments || {};
+      
+      // Validate required project_id
+      if (!args.project_id || typeof args.project_id !== 'string' || args.project_id.trim() === '') {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Missing or invalid required parameter: project_id`
+        );
+      }
+      
       const projectId = String(args.project_id);
+
+      // Validate project ID format
+      if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.`
+        );
+      }
+      
+      // Validate session_id format if present
+      if (args.session_id !== undefined) {
+        if (typeof args.session_id !== 'string' || args.session_id.trim() === '') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Invalid session_id: must be a non-empty string`
+          );
+        }
+        if (!/^[a-zA-Z0-9_-]+$/.test(String(args.session_id))) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Invalid session_id format. Only alphanumeric characters, underscores, and hyphens are allowed.`
+          );
+        }
+      }
 
       try {
         switch (name) {
@@ -461,11 +543,10 @@ export class ButlerMcpServer {
           }
 
           case 'todo.add': {
-            // Transaction-safe atomic sequential incrementing ID in SQLite
+            validateSession(projectId, String(args.session_id));
             const nextId = getNextSequenceValue(projectId, 'todo');
-
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
+            
+            const priority = args.priority as 'low' | 'medium' | 'high' | undefined;
 
             const event = appendEvent(
               projectId,
@@ -474,10 +555,12 @@ export class ButlerMcpServer {
               {
                 todo_id: nextId,
                 title: String(args.title),
-                priority: args.priority || 'medium',
-                status: 'pending'
+                priority: priority || 'medium'
               }
             );
+
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
 
             return {
               content: [
@@ -490,10 +573,10 @@ export class ButlerMcpServer {
           }
 
           case 'todo.complete': {
+            validateSession(projectId, String(args.session_id));
             const todoId = Number(args.todo_id);
             const reqVersion = Number(args.version);
 
-            // Fetch state (from cache, O(1)) to confirm optimistic lock version
             const state = materializeProject(projectId, false);
             const todo = state.todos[todoId];
 
@@ -501,16 +584,12 @@ export class ButlerMcpServer {
               throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
             }
 
-            // Optimistic lock verification
             if (todo.version !== reqVersion) {
               throw new McpError(
                 ErrorCode.InvalidParams,
                 `Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got request version ${reqVersion}. Please fetch resources and try again.`
               );
             }
-
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
 
             const event = appendEvent(
               projectId,
@@ -521,6 +600,9 @@ export class ButlerMcpServer {
                 version: reqVersion
               }
             );
+
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
 
             return {
               content: [
@@ -533,18 +615,28 @@ export class ButlerMcpServer {
           }
 
           case 'wiki.update': {
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
-
+            validateSession(projectId, String(args.session_id));
+            const content = String(args.content);
+            const topic = String(args.topic);
+            
+            if (content.length > 65536) {
+              throw new McpError(ErrorCode.InvalidParams, 'Wiki content exceeds maximum length of 64KB');
+            }
+            if (topic.length > 256) {
+              throw new McpError(ErrorCode.InvalidParams, 'Wiki topic exceeds maximum length of 256 characters');
+            }
+            
             const event = appendEvent(
               projectId,
               String(args.session_id),
               'WIKI_UPDATED',
               {
-                topic: String(args.topic),
-                content: String(args.content)
+                topic,
+                content
               }
             );
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
             return {
               content: [
                 {
@@ -556,17 +648,23 @@ export class ButlerMcpServer {
           }
 
           case 'rule.add': {
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
-
+            validateSession(projectId, String(args.session_id));
+            const content = String(args.content);
+            
+            if (content.length > 4096) {
+              throw new McpError(ErrorCode.InvalidParams, 'Rule content exceeds maximum length of 4KB');
+            }
+            
             const event = appendEvent(
               projectId,
               String(args.session_id),
               'RULE_ADDED',
               {
-                content: String(args.content)
+                content
               }
             );
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
             return {
               content: [
                 {
@@ -578,9 +676,17 @@ export class ButlerMcpServer {
           }
 
           case 'decision.record': {
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
-
+            validateSession(projectId, String(args.session_id));
+            const context = String(args.context);
+            const decision = String(args.decision);
+            
+            if (context.length > 8192) {
+              throw new McpError(ErrorCode.InvalidParams, 'Decision context exceeds maximum length of 8KB');
+            }
+            if (decision.length > 8192) {
+              throw new McpError(ErrorCode.InvalidParams, 'Decision text exceeds maximum length of 8KB');
+            }
+            
             const event = appendEvent(
               projectId,
               String(args.session_id),
@@ -588,10 +694,12 @@ export class ButlerMcpServer {
               {
                 decision_id: String(args.decision_id),
                 title: String(args.title),
-                context: String(args.context),
-                decision: String(args.decision)
+                context,
+                decision
               }
             );
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
             return {
               content: [
                 {
@@ -603,22 +711,22 @@ export class ButlerMcpServer {
           }
 
           case 'handoff.create': {
-            // Force cache invalidation immediately on write
-            invalidateProjectCache(projectId);
-
+            validateSession(projectId, String(args.session_id));
             const event = appendEvent(
               projectId,
               String(args.session_id),
               'HANDOFF_CREATED',
               {
                 session_id: String(args.session_id),
-                completed_todos: args.completed_todos || [],
-                pending_todos: args.pending_todos || [],
-                recent_decisions: args.recent_decisions || [],
+                completed_todos: (args.completed_todos as string[] | undefined) || [],
+                pending_todos: (args.pending_todos as string[] | undefined) || [],
+                recent_decisions: (args.recent_decisions as string[] | undefined) || [],
                 summary: String(args.summary),
                 timestamp: Math.floor(Date.now() / 1000)
               }
             );
+            updateLastEventSeen(String(args.session_id), event.id);
+            invalidateProjectCache(projectId);
 
             return {
               content: [
@@ -632,7 +740,12 @@ export class ButlerMcpServer {
 
           case 'memory.store': {
             const type = String(args.type);
-            // Explicit type validation before passing to SQLite CHECK constraints
+            const content = String(args.content);
+            
+            if (content.length > 65536) {
+              throw new McpError(ErrorCode.InvalidParams, 'Memory content exceeds maximum length of 64KB');
+            }
+            
             if (!['summary', 'decision', 'rule', 'wiki'].includes(type)) {
               throw new McpError(
                 ErrorCode.InvalidParams,
@@ -643,7 +756,7 @@ export class ButlerMcpServer {
             const mem = addMemory(
               projectId,
               type as any,
-              String(args.content),
+              content,
               undefined,
               args.importance !== undefined ? Number(args.importance) : 0.5
             );
@@ -678,7 +791,7 @@ export class ButlerMcpServer {
 
             let responseText = `### Semantic Search Results for "${args.query}"\n\n`;
             for (const r of results) {
-              responseText += `**[ID ${r.memory.id}] ${r.memory.type.toUpperCase()} (Score: ${(r.score * 100).toFixed(1)}%, Recency: ${(r.recency * 100).toFixed(1)}%, Intent Boost: ${(r.relevance * 100).toFixed(1)}%)**\n`;
+              responseText += `**[ID ${r.memory.id}] ${r.memory.type.toUpperCase()} (Score: ${(r.score * 100).toFixed(1)}%, Keyword Match: ${(r.relevance * 100).toFixed(1)}%, Recency: ${(r.recency * 100).toFixed(1)}%)**\n`;
               responseText += `> ${r.memory.content}\n\n`;
             }
 

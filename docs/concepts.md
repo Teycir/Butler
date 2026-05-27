@@ -74,8 +74,7 @@ stateDiagram-v2
     Stale --> Alive: Client reconnects & heartbeats
     
     Stale --> Dead: Missed heartbeat > 300s (5m)
-    Dead --> Recovering: Client reconnects (SESSION_RECOVERED)
-    Recovering --> Alive
+    Dead --> Alive: Client reconnects (SESSION_RECOVERED)
     
     Alive --> Dead: Graceful disconnect (session.disconnect)
     Dead --> [*]

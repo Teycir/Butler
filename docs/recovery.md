@@ -53,10 +53,11 @@ Cursor terminates gracefully when closed:
     ```json
     {
       "session_id": "cursor-1",
-      "type": "graceful",
-      "created_todos": ["Configure synchronous mode (ID 2)"],
       "completed_todos": ["TODO ID 1"],
-      "decisions_recorded": ["WAL SQLite Journaling: Enable WAL and Normal sync"],
+      "pending_todos": ["\"Configure synchronous mode\" (ID 2)"],
+      "recent_decisions": ["\"WAL SQLite Journaling\": Enable WAL and Normal sync"],
+      "rules_added": [],
+      "wiki_updated": [],
       "summary": "Graceful end of session for agent cursor-1.",
       "timestamp": 1716832800
     }
@@ -118,9 +119,13 @@ Butler's active heartbeat sweep evaluates the registry:
     ```json
     {
       "session_id": "claude-crash",
-      "type": "ungraceful",
+      "completed_todos": [],
+      "pending_todos": ["\"Refactor transport layer\" (ID 3)"],
+      "recent_decisions": [],
+      "rules_added": [],
+      "wiki_updated": [],
       "summary": "Session claude-crash lost connection (missed heartbeat). Auto-generated continuity marker.",
-      "pending_todos": ["Refactor transport layer (ID 3)"]
+      "timestamp": 1716832800
     }
     ```
 

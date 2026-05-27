@@ -44,14 +44,16 @@ export function addMemory(
   };
 }
 
-export function getMemories(projectId: string): MemoryRecord[] {
+export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
   const db = getDb();
-  const rows = db.prepare(`
+  const query = `
     SELECT id, project_id, type, content, embedding, importance, created_at
     FROM memories
     WHERE project_id = ?
     ORDER BY id DESC
-  `).all(projectId) as any[];
+    ${limit ? `LIMIT ${limit}` : ''}
+  `;
+  const rows = db.prepare(query).all(projectId) as any[];
 
   return rows.map(r => ({
     id: Number(r.id),
@@ -78,7 +80,8 @@ export function searchMemories(
   queryEmbedding?: Float32Array | number[],
   limit: number = 10
 ): SearchResult[] {
-  const memories = getMemories(projectId);
+  // Fetch only recent memories to bound memory and compute cost
+  const memories = getMemories(projectId, 500);
   if (memories.length === 0) return [];
 
   const docs: SearchableDocument[] = memories.map(m => ({
@@ -125,8 +128,9 @@ export function searchMemories(
     const rel = relevanceMap.get(m.id) || 0;
     
     // Calculate recency: e^(-lambda * t_hours)
+    // Use lambda = 0.001 for ~29-day half-life (better for project knowledge)
     const ageHours = Math.max(0, (nowSecs - m.created_at) / 3600);
-    const lambda = 0.05; // ~14 hour half-life
+    const lambda = 0.001;
     const rec = Math.exp(-lambda * ageHours);
     
     const imp = m.importance;

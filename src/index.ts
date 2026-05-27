@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
-import { initDatabase, closeDatabase } from './db/database.js';
+import { initDatabase, closeDatabase, getDb } from './db/database.js';
 import { startLifecycleMonitor, stopLifecycleMonitor } from './coordinator/lifecycle.js';
+import { materializeProject } from './events/materializer.js';
 import { ButlerMcpServer } from './mcp/server.js';
 
 // Load environmental variables
@@ -21,6 +22,18 @@ async function main() {
     // 4. Register exit hooks for graceful release
     const cleanUp = () => {
       stopLifecycleMonitor();
+      
+      // Trigger snapshot before shutdown
+      try {
+        const db = getDb();
+        const projects = db.prepare('SELECT id FROM projects').all() as any[];
+        for (const project of projects) {
+          materializeProject(project.id, true);
+        }
+      } catch (e) {
+        console.error('Snapshot on shutdown failed:', e);
+      }
+      
       closeDatabase();
       process.exit(0);
     };

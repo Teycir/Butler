@@ -29,6 +29,7 @@ export interface ProjectState {
   wiki: Record<string, WikiPage>;
   rules: string[];
   decisions: Record<string, DecisionItem>;
+  handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: any; source?: 'agent' | 'system' }>;
   lastEventId: number;
 }
 
@@ -38,6 +39,7 @@ export function createInitialState(): ProjectState {
     wiki: {},
     rules: [],
     decisions: {},
+    handoffs: [],
     lastEventId: 0
   };
 }
@@ -55,6 +57,7 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     wiki: { ...state.wiki },
     rules: [...state.rules],
     decisions: { ...state.decisions },
+    handoffs: [...state.handoffs],
     lastEventId: event.id
   };
 
@@ -148,6 +151,21 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
       break;
     }
 
+    case 'HANDOFF_CREATED':
+    case 'SESSION_DISCONNECTED': {
+      const handoffData = event.type === 'HANDOFF_CREATED' ? payload : payload.handoff;
+      if (handoffData) {
+        updatedState.handoffs.push({
+          session_id: handoffData.session_id || event.session_id,
+          summary: handoffData.summary || '',
+          timestamp: handoffData.timestamp || event.created_at,
+          payload: handoffData,
+          source: event.type === 'HANDOFF_CREATED' ? 'agent' : 'system'
+        });
+      }
+      break;
+    }
+
     default:
       // Other events like heartbeats do not mutate materialized models directly
       break;
@@ -160,10 +178,10 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
   const cached = projectCache.get(projectId);
   let state: ProjectState;
   let startEventId = 0;
+  let lastSnapshotEventId = 0;
 
   if (cached) {
-    // Deep copy from cache to prevent outside mutations corrupting the cached reference
-    state = JSON.parse(JSON.stringify(cached.state));
+    state = structuredClone(cached.state);
     startEventId = cached.lastEventId;
   } else {
     const latestSnapshot = getLatestSnapshot(projectId);
@@ -171,15 +189,15 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
 
     if (latestSnapshot) {
       try {
-        state = JSON.parse(latestSnapshot.snapshot_json);
+        state = { ...createInitialState(), ...JSON.parse(latestSnapshot.snapshot_json) };
         startEventId = latestSnapshot.event_id;
+        lastSnapshotEventId = latestSnapshot.event_id;
       } catch (e) {
         console.error(`Failed to load snapshot for project ${projectId}, replaying from beginning:`, e);
       }
     }
   }
 
-  // Fetch and replay only the events appended since our last processed checkpoint
   const events = getEvents(projectId, startEventId);
   let eventCount = 0;
 
@@ -188,15 +206,17 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     eventCount++;
   }
 
-  // Cache a deep copy of the newly computed state
   projectCache.set(projectId, {
-    state: JSON.parse(JSON.stringify(state)),
+    state: structuredClone(state),
     lastEventId: state.lastEventId
   });
 
-  // Snapshot Trigger Rules: snapshot every 100 events
-  if (triggerSnapshotCheck && eventCount >= 100 && state.lastEventId > startEventId) {
-    createSnapshot(projectId, state.lastEventId, state);
+  // Snapshot trigger: check events since last snapshot, not just events in this call
+  if (triggerSnapshotCheck && state.lastEventId > 0) {
+    const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
+    if (eventsSinceSnapshot >= 100) {
+      createSnapshot(projectId, state.lastEventId, state);
+    }
   }
 
   return state;

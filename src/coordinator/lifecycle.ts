@@ -1,13 +1,14 @@
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { getDb } from '../db/database.js';
 import { appendEvent, getEvents, getSessionEvents } from '../events/store.js';
 import { EventRecord } from '../events/types.js';
-import { materializeProject } from '../events/materializer.js';
+import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
 
 export interface SessionRecord {
   id: string;
   project_id: string;
   client_type: string;
-  status: 'alive' | 'stale' | 'dead' | 'recovering';
+  status: 'alive' | 'stale' | 'dead';
   last_heartbeat: number;
   last_event_seen: number;
 }
@@ -30,28 +31,34 @@ export function registerSession(projectId: string, sessionId: string, clientType
   `).get(sessionId) as any;
 
   if (existing) {
-    db.prepare(`
-      UPDATE sessions 
-      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?
-      WHERE id = ?
-    `).run(now, clientType, projectId, sessionId);
-    
-    appendEvent(projectId, sessionId, 'SESSION_RECOVERED', {
+    const event = appendEvent(projectId, sessionId, 'SESSION_RECOVERED', {
       session_id: sessionId,
       client_type: clientType,
       timestamp: now
     });
+
+    db.prepare(`
+      UPDATE sessions 
+      SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?, last_event_seen = ?
+      WHERE id = ?
+    `).run(now, clientType, projectId, event.id, sessionId);
   } else {
     db.prepare(`
       INSERT INTO sessions (id, project_id, client_type, status, last_heartbeat, last_event_seen)
       VALUES (?, ?, ?, 'alive', ?, 0)
     `).run(sessionId, projectId, clientType, now);
 
-    appendEvent(projectId, sessionId, 'SESSION_CONNECTED', {
+    const event = appendEvent(projectId, sessionId, 'SESSION_CONNECTED', {
       session_id: sessionId,
       client_type: clientType,
       timestamp: now
     });
+
+    db.prepare(`
+      UPDATE sessions
+      SET last_event_seen = ?
+      WHERE id = ?
+    `).run(event.id, sessionId);
   }
 
   return getSession(sessionId)!;
@@ -100,7 +107,10 @@ export function processHeartbeat(projectId: string, sessionId: string): void {
   
   const sess = getSession(sessionId);
   if (!sess) {
-    throw new Error(`Session ${sessionId} is not registered in project ${projectId}. Please call session.register first.`);
+    throw new McpError(ErrorCode.InvalidRequest, `Session ${sessionId} is not registered in project ${projectId}. Please call session.register first.`);
+  }
+  if (sess.project_id !== projectId) {
+    throw new McpError(ErrorCode.InvalidRequest, `Session ${sessionId} is registered in project ${sess.project_id}, but request is for project ${projectId}.`);
   }
 
   db.prepare(`
@@ -110,24 +120,56 @@ export function processHeartbeat(projectId: string, sessionId: string): void {
   `).run(now, sessionId);
 }
 
+export function validateSession(projectId: string, sessionId: string): void {
+  const sess = getSession(sessionId);
+  if (!sess) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Session ${sessionId} is not registered. Please call session.register first.`
+    );
+  }
+  if (sess.project_id !== projectId) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Session ${sessionId} is registered under project ${sess.project_id}, but request is for project ${projectId}.`
+    );
+  }
+  if (sess.status === 'dead') {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Session ${sessionId} is dead. Please register a new session.`
+    );
+  }
+}
+
+export function updateLastEventSeen(sessionId: string, eventId: number): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE sessions 
+    SET last_event_seen = ?
+    WHERE id = ?
+  `).run(eventId, sessionId);
+}
+
 export function gracefulDisconnect(projectId: string, sessionId: string): void {
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
+  
+  const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
+
+  const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
+    session_id: sessionId,
+    timestamp: now,
+    handoff: handoff
+  });
+
+  updateLastEventSeen(sessionId, event.id);
   
   db.prepare(`
     UPDATE sessions 
     SET status = 'dead', last_heartbeat = ?
     WHERE id = ?
   `).run(now, sessionId);
-
-  // Generate a graceful handoff
-  const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
-
-  appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
-    session_id: sessionId,
-    timestamp: now,
-    handoff: handoff
-  });
 }
 
 export function generateStructuredHandoff(
@@ -135,8 +177,11 @@ export function generateStructuredHandoff(
   sessionId: string,
   type: 'graceful' | 'ungraceful'
 ): Record<string, any> {
-  // O(1) database-indexed lookup returning only events emitted by this specific session
-  const sessionEvents = getSessionEvents(projectId, sessionId, 0);
+  const sess = getSession(sessionId);
+  const sinceEventId = sess ? sess.last_event_seen : 0;
+
+  // Fetch only events since last checkpoint for this session
+  const sessionEvents = getSessionEvents(projectId, sessionId, sinceEventId);
 
   const completedTodos: string[] = [];
   const createdTodos: string[] = [];
@@ -177,11 +222,10 @@ export function generateStructuredHandoff(
 
   return {
     session_id: sessionId,
-    type,
-    created_todos: createdTodos,
     completed_todos: completedTodos,
+    pending_todos: createdTodos,
+    recent_decisions: decisionsRecorded,
     rules_added: rulesAdded,
-    decisions_recorded: decisionsRecorded,
     wiki_updated: wikiUpdated,
     summary,
     timestamp: Math.floor(Date.now() / 1000)
@@ -211,6 +255,7 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
         session_id: row.id,
         timestamp: now
       });
+      invalidateProjectCache(row.project_id);
     }
 
     // 2. Sessions transitioning to DEAD (300s / 5m)
@@ -225,12 +270,15 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
       
       const handoff = generateStructuredHandoff(row.project_id, row.id, 'ungraceful');
       
-      appendEvent(row.project_id, row.id, 'SESSION_DISCONNECTED', {
+      const event = appendEvent(row.project_id, row.id, 'SESSION_DISCONNECTED', {
         session_id: row.id,
         timestamp: now,
         reason: 'heartbeat_timeout',
         handoff
       });
+      
+      updateLastEventSeen(row.id, event.id);
+      invalidateProjectCache(row.project_id);
     }
 
     // 3. Periodic snapshot check: Trigger snapshot checkpoint every 30 minutes (1800s)

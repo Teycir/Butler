@@ -12,6 +12,7 @@ export type EventType =
   // Knowledge Events
   | 'WIKI_UPDATED'
   | 'RULE_ADDED'
+  | 'RULE_REMOVED'
   | 'DECISION_RECORDED'
   | 'HANDOFF_CREATED'
   // Memory Events
@@ -63,6 +64,8 @@ export interface HandoffPayload {
   completed_todos: string[];
   pending_todos: string[];
   recent_decisions: string[];
+  rules_added?: string[];
+  wiki_updated?: string[];
   summary: string;
   timestamp: number;
 }
@@ -72,3 +75,24 @@ export interface SessionPayload {
   client_type: string;
   timestamp: number;
 }
+
+// Map EventType to its respective strongly typed payload
+export interface EventPayloadMap {
+  'SESSION_CONNECTED': SessionPayload;
+  'SESSION_DISCONNECTED': { session_id: string; timestamp: number; handoff?: any; reason?: string };
+  'SESSION_STALE': { session_id: string; timestamp: number };
+  'SESSION_RECOVERED': SessionPayload;
+  'TODO_CREATED': { todo_id: number; title: string; priority: 'low' | 'medium' | 'high' };
+  'TODO_UPDATED': { todo_id: number; title?: string; priority?: 'low' | 'medium' | 'high'; status?: 'pending' | 'completed' };
+  'TODO_COMPLETED': { todo_id: number; version: number };
+  'TODO_DELETED': { todo_id: number };
+  'WIKI_UPDATED': { topic: string; content: string };
+  'RULE_ADDED': { content: string };
+  'RULE_REMOVED': { content: string };
+  'DECISION_RECORDED': { decision_id: string; title: string; context: string; decision: string };
+  'HANDOFF_CREATED': HandoffPayload;
+  'SUMMARY_CREATED': any;
+  'MEMORY_EXTRACTED': any;
+  'SNAPSHOT_CREATED': any;
+}
+

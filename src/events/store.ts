@@ -1,11 +1,11 @@
 import { getDb } from '../db/database.js';
-import { EventRecord, EventType } from './types.js';
+import { EventPayloadMap, EventRecord, EventType } from './types.js';
 
-export function appendEvent(
+export function appendEvent<T extends EventType>(
   projectId: string,
   sessionId: string,
-  type: EventType,
-  payload: Record<string, any>
+  type: T,
+  payload: EventPayloadMap[T]
 ): EventRecord {
   const db = getDb();
   const payloadStr = JSON.stringify(payload);
@@ -108,6 +108,12 @@ export function createSnapshot(projectId: string, eventId: number, state: Record
     INSERT INTO snapshots (project_id, event_id, snapshot_json, created_at)
     VALUES (?, ?, ?, ?)
   `).run(projectId, eventId, stateStr, now);
+  
+  // Delete old snapshots to prevent unbounded growth
+  db.prepare(`
+    DELETE FROM snapshots 
+    WHERE project_id = ? AND event_id < ?
+  `).run(projectId, eventId);
 }
 
 export interface SnapshotRecord {
