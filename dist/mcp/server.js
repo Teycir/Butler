@@ -270,7 +270,7 @@ export class ButlerMcpServer {
             return {
                 tools: [
                     {
-                        name: 'session.register',
+                        name: 'sessionregister',
                         description: 'Register a new active agent session connection.',
                         inputSchema: {
                             type: 'object',
@@ -283,7 +283,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'session.heartbeat',
+                        name: 'sessionheartbeat',
                         description: 'Send a standard heartbeat signal to preserve session presence (should be run every 15s).',
                         inputSchema: {
                             type: 'object',
@@ -295,7 +295,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'session.disconnect',
+                        name: 'sessiondisconnect',
                         description: 'Gracefully disconnect and shut down an active session connection, immediately flushing a handoff log.',
                         inputSchema: {
                             type: 'object',
@@ -307,7 +307,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'todo.add',
+                        name: 'todoadd',
                         description: 'Create and broadcast a shared TODO task.',
                         inputSchema: {
                             type: 'object',
@@ -321,7 +321,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'todo.complete',
+                        name: 'todocomplete',
                         description: 'Mark a shared TODO task as completed with optimistic version checking.',
                         inputSchema: {
                             type: 'object',
@@ -335,7 +335,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'todo.update',
+                        name: 'todoupdate',
                         description: 'Update a TODO task title, priority, or status with optimistic version checking.',
                         inputSchema: {
                             type: 'object',
@@ -352,7 +352,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'todo.delete',
+                        name: 'tododelete',
                         description: 'Delete a TODO task with optimistic version checking.',
                         inputSchema: {
                             type: 'object',
@@ -366,7 +366,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'wiki.update',
+                        name: 'wikiupdate',
                         description: 'Create or update a repository wiki knowledge base document.',
                         inputSchema: {
                             type: 'object',
@@ -380,7 +380,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'rule.add',
+                        name: 'ruleadd',
                         description: 'Add a persistent development guideline rule that all participating agents should abide by.',
                         inputSchema: {
                             type: 'object',
@@ -393,7 +393,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'rule.remove',
+                        name: 'ruleremove',
                         description: 'Remove a persistent development guideline rule by ID.',
                         inputSchema: {
                             type: 'object',
@@ -406,7 +406,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'todo.list',
+                        name: 'todolist',
                         description: 'List all active TODOs in the project. Alternative to reading the butler://projects/{id}/todos resource.',
                         inputSchema: {
                             type: 'object',
@@ -418,7 +418,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'memory.delete',
+                        name: 'memorydelete',
                         description: 'Delete a memory by ID to remove stale or incorrect information.',
                         inputSchema: {
                             type: 'object',
@@ -431,7 +431,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'project.list',
+                        name: 'projectlist',
                         description: 'List all projects in the Butler database. Useful for agents initializing into an unknown workspace.',
                         inputSchema: {
                             type: 'object',
@@ -440,7 +440,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'decision.record',
+                        name: 'decisionrecord',
                         description: 'Log a concrete design or architectural decision (ADR) for cumulative project memory.',
                         inputSchema: {
                             type: 'object',
@@ -456,7 +456,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'handoff.create',
+                        name: 'handoffcreate',
                         description: 'Explicitly record a session handoff event containing recent accomplishments and open tasks.',
                         inputSchema: {
                             type: 'object',
@@ -472,7 +472,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'memory.store',
+                        name: 'memorystore',
                         description: 'Store a generic semantic project memory, summary, or observation.',
                         inputSchema: {
                             type: 'object',
@@ -486,7 +486,7 @@ export class ButlerMcpServer {
                         }
                     },
                     {
-                        name: 'memory.search',
+                        name: 'memorysearch',
                         description: 'Search repository history and memory using hybrid local TF-IDF semantic relevance.',
                         inputSchema: {
                             type: 'object',
@@ -506,13 +506,13 @@ export class ButlerMcpServer {
             const name = request.params.name;
             const args = request.params.arguments || {};
             // project.list is the only tool that does not target a specific project
-            if (name === 'project.list') {
+            if (name === 'projectlist') {
                 try {
                     const db = getDb();
                     const rows = db.prepare('SELECT id, name, created_at FROM projects ORDER BY created_at ASC').all();
                     if (rows.length === 0) {
                         return {
-                            content: [{ type: 'text', text: 'No projects found in the Butler database. Use session.register to create one.' }]
+                            content: [{ type: 'text', text: 'No projects found in the Butler database. Call `sessionregister` with project_id, session_id, and client_type to get started.' }]
                         };
                     }
                     const projectList = rows.map(r => ({
@@ -543,7 +543,7 @@ export class ButlerMcpServer {
             }
             try {
                 switch (name) {
-                    case 'session.register': {
+                    case 'sessionregister': {
                         const sess = registerSession(projectId, String(args.session_id), String(args.client_type));
                         return {
                             content: [
@@ -554,7 +554,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'session.heartbeat': {
+                    case 'sessionheartbeat': {
                         processHeartbeat(projectId, String(args.session_id));
                         return {
                             content: [
@@ -565,7 +565,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'session.disconnect': {
+                    case 'sessiondisconnect': {
                         gracefulDisconnect(projectId, String(args.session_id));
                         return {
                             content: [
@@ -576,7 +576,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'todo.add': {
+                    case 'todoadd': {
                         validateSession(projectId, String(args.session_id));
                         const nextId = getNextSequenceValue(projectId, 'todo');
                         const title = sanitizeTitle(String(args.title));
@@ -597,7 +597,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'todo.complete': {
+                    case 'todocomplete': {
                         validateSession(projectId, String(args.session_id));
                         const todoId = Number(args.todo_id);
                         const reqVersion = Number(args.version);
@@ -632,7 +632,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'todo.update': {
+                    case 'todoupdate': {
                         validateSession(projectId, String(args.session_id));
                         const todoId = Number(args.todo_id);
                         const reqVersion = Number(args.version);
@@ -666,7 +666,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'todo.delete': {
+                    case 'tododelete': {
                         validateSession(projectId, String(args.session_id));
                         const todoId = Number(args.todo_id);
                         const reqVersion = Number(args.version);
@@ -697,7 +697,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'wiki.update': {
+                    case 'wikiupdate': {
                         validateSession(projectId, String(args.session_id));
                         const topic = sanitizeTitle(String(args.topic));
                         const content = sanitizeInput(String(args.content), 65536);
@@ -716,7 +716,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'rule.add': {
+                    case 'ruleadd': {
                         validateSession(projectId, String(args.session_id));
                         const content = sanitizeInput(String(args.content), 4096);
                         const db = getDb();
@@ -726,7 +726,7 @@ export class ButlerMcpServer {
                             // Prevent adding an identical rule body twice (idempotency guard)
                             const duplicate = Object.values(state.rules).find(r => r.content === content);
                             if (duplicate) {
-                                throw new McpError(ErrorCode.InvalidRequest, `An identical rule already exists with ID ${duplicate.id}. Use rule.remove then rule.add to update it.`);
+                                throw new McpError(ErrorCode.InvalidRequest, `An identical rule already exists with ID ${duplicate.id}. Use ruleremove then ruleadd to update it.`);
                             }
                             const ruleId = randomUUID();
                             const event = appendEvent(projectId, String(args.session_id), 'RULE_ADDED', { rule_id: ruleId, content });
@@ -744,7 +744,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'rule.remove': {
+                    case 'ruleremove': {
                         validateSession(projectId, String(args.session_id));
                         const ruleId = String(args.rule_id);
                         const db = getDb();
@@ -770,7 +770,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'decision.record': {
+                    case 'decisionrecord': {
                         validateSession(projectId, String(args.session_id));
                         const decisionId = sanitizeTitle(String(args.decision_id));
                         const title = sanitizeTitle(String(args.title));
@@ -793,7 +793,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'handoff.create': {
+                    case 'handoffcreate': {
                         validateSession(projectId, String(args.session_id));
                         const completed_todos = args.completed_todos || [];
                         const pending_todos = args.pending_todos || [];
@@ -827,7 +827,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'memory.store': {
+                    case 'memorystore': {
                         const type = String(args.type);
                         const content = sanitizeInput(String(args.content), 65536);
                         if (!content || content.trim().length === 0) {
@@ -853,7 +853,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'memory.search': {
+                    case 'memorysearch': {
                         const results = searchMemories(projectId, String(args.query), undefined, args.limit ? Number(args.limit) : 10);
                         if (results.length === 0) {
                             return {
@@ -879,7 +879,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'todo.list': {
+                    case 'todolist': {
                         const state = materializeProject(projectId, false);
                         const todos = Object.values(state.todos);
                         const filterStatus = args.status;
@@ -901,7 +901,7 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'memory.delete': {
+                    case 'memorydelete': {
                         const memoryId = Number(args.memory_id);
                         if (!Number.isInteger(memoryId) || memoryId <= 0) {
                             throw new McpError(ErrorCode.InvalidParams, 'memory_id must be a positive integer');
@@ -934,10 +934,10 @@ export class ButlerMcpServer {
                             ]
                         };
                     }
-                    case 'project.list': {
-                        // This case is unreachable — project.list is handled before the switch
+                    case 'projectlist': {
+                        // This case is unreachable — projectlist is handled before the switch
                         // because it does not require a project_id. Left as a safety fallback.
-                        throw new McpError(ErrorCode.InternalError, 'project.list should have been handled before this switch.');
+                        throw new McpError(ErrorCode.InternalError, 'projectlist should have been handled before this switch.');
                     }
                     default:
                         throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
