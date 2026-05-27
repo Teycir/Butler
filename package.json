@@ -1,0 +1,32 @@
+{
+  "name": "butler-mcp",
+  "version": "1.0.0",
+  "description": "Persistent shared memory and coordination layer for AI coding agents",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "tsx tests/integration.test.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent-coordination",
+    "memory"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.12.12",
+    "tsx": "^4.10.5",
+    "typescript": "^5.4.5"
+  }
+}
