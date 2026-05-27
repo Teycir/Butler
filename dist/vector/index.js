@@ -20,13 +20,18 @@ export function addMemory(projectId, type, content, embeddingVector, importance 
 }
 export function getMemories(projectId, limit) {
     const db = getDb();
-    const rows = db.prepare(`
-    SELECT id, project_id, type, content, embedding, importance, created_at
-    FROM memories
-    WHERE project_id = ?
-    ORDER BY id DESC
-    LIMIT ?
-  `).all(projectId, limit ?? -1); // -1 means no limit in SQLite
+    // Use conditional query to avoid relying on SQLite's undocumented LIMIT -1 behavior
+    const query = limit !== undefined
+        ? `SELECT id, project_id, type, content, embedding, importance, created_at
+       FROM memories
+       WHERE project_id = ?
+       ORDER BY id DESC
+       LIMIT ${limit}`
+        : `SELECT id, project_id, type, content, embedding, importance, created_at
+       FROM memories
+       WHERE project_id = ?
+       ORDER BY id DESC`;
+    const rows = db.prepare(query).all(projectId);
     return rows.map(r => ({
         id: Number(r.id),
         project_id: r.project_id,
@@ -39,6 +44,9 @@ export function getMemories(projectId, limit) {
 }
 export function searchMemories(projectId, query, queryEmbedding, limit = 10) {
     // Fetch only recent memories to bound memory and compute cost
+    // NOTE: TF-IDF scoring is done in-process on all 500 documents per search.
+    // For high-frequency search patterns, this will be the first bottleneck at scale.
+    // Consider adding a pre-computed inverted index if search latency becomes an issue.
     const memories = getMemories(projectId, 500);
     if (memories.length === 0)
         return [];

@@ -582,8 +582,6 @@ export class ButlerMcpServer {
 
           case 'session.disconnect': {
             gracefulDisconnect(projectId, String(args.session_id));
-            // Invalidate cache immediately on graceful disconnect (since it writes events)
-            invalidateProjectCache(projectId);
             return {
               content: [
                 {
@@ -929,6 +927,10 @@ export class ButlerMcpServer {
           case 'memory.store': {
             const type = String(args.type);
             const content = String(args.content);
+            
+            if (!content || content.trim().length === 0) {
+              throw new McpError(ErrorCode.InvalidParams, 'Memory content cannot be empty');
+            }
             
             if (content.length > 65536) {
               throw new McpError(ErrorCode.InvalidParams, 'Memory content exceeds maximum length of 64KB');

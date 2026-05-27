@@ -179,6 +179,9 @@ export function gracefulDisconnect(projectId: string, sessionId: string): void {
   });
   
   disconnectTx();
+  
+  // Invalidate cache after transaction commits (consistent with lifecycle monitor pattern)
+  invalidateProjectCache(projectId);
 }
 
 export function generateStructuredHandoff(
@@ -292,14 +295,16 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
     }
 
     // 2. Sessions transitioning to DEAD (300s / 5m)
+    // Only target 'stale' sessions to prevent overlap with stale transition above
     const deadRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
       FROM sessions
-      WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > 300
+      WHERE status = 'stale' AND (? - last_heartbeat) > 300
     `).all(now) as any[];
 
     const deadTransition = db.transaction(() => {
       for (const row of deadRows) {
+        // Generate handoff BEFORE marking session dead to ensure getSession() reads correct state
         const handoff = generateStructuredHandoff(row.project_id, row.id, 'ungraceful');
         
         db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(row.id);

@@ -160,10 +160,18 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
         }
     }
     const events = getEvents(projectId, startEventId);
+    // Optimization: on pure cache hit with no new events, return cached clone directly
+    if (cached && events.length === 0) {
+        return structuredClone(cached.state);
+    }
     for (const event of events) {
         state = projectEvent(state, event);
     }
     // Snapshot trigger: check count of events since last snapshot
+    // Formula: events.length (new events) + (startEventId - lastSnapshotEventId) (events counted in previous iterations)
+    // When cache is cold and no snapshot exists: startEventId=0, lastSnapshotEventId=0 → events.length
+    // When loading from snapshot: startEventId=snapshot.event_id, lastSnapshotEventId=snapshot.event_id → events.length
+    // When loading from cache: startEventId=cached.lastEventId, lastSnapshotEventId=cached.lastSnapshotEventId → correct cumulative count
     if (triggerSnapshotCheck && state.lastEventId > 0) {
         const eventsSinceSnapshot = events.length + (startEventId - lastSnapshotEventId);
         if (eventsSinceSnapshot >= 100) {
@@ -171,11 +179,12 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
             lastSnapshotEventId = state.lastEventId;
         }
     }
-    const clonedState = structuredClone(state);
+    // Store a clone in cache and return a separate clone to prevent mutation leakage
+    const cacheClone = structuredClone(state);
     projectCache.set(projectId, {
-        state: clonedState,
+        state: cacheClone,
         lastEventId: state.lastEventId,
         lastSnapshotEventId: lastSnapshotEventId
     });
-    return clonedState;
+    return structuredClone(state);
 }
