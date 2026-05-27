@@ -673,6 +673,10 @@ export class ButlerMcpServer {
                     case 'rule.remove': {
                         validateSession(projectId, String(args.session_id));
                         const content = String(args.content);
+                        const state = materializeProject(projectId, false);
+                        if (!state.rules.includes(content)) {
+                            throw new McpError(ErrorCode.InvalidRequest, `Rule not found: "${content}"`);
+                        }
                         const event = appendEvent(projectId, String(args.session_id), 'RULE_REMOVED', {
                             content
                         });
@@ -716,11 +720,23 @@ export class ButlerMcpServer {
                     }
                     case 'handoff.create': {
                         validateSession(projectId, String(args.session_id));
+                        const completed_todos = args.completed_todos || [];
+                        const pending_todos = args.pending_todos || [];
+                        const recent_decisions = args.recent_decisions || [];
+                        if (completed_todos.length > 100) {
+                            throw new McpError(ErrorCode.InvalidParams, 'completed_todos exceeds maximum length of 100 items');
+                        }
+                        if (pending_todos.length > 100) {
+                            throw new McpError(ErrorCode.InvalidParams, 'pending_todos exceeds maximum length of 100 items');
+                        }
+                        if (recent_decisions.length > 100) {
+                            throw new McpError(ErrorCode.InvalidParams, 'recent_decisions exceeds maximum length of 100 items');
+                        }
                         const event = appendEvent(projectId, String(args.session_id), 'HANDOFF_CREATED', {
                             session_id: String(args.session_id),
-                            completed_todos: args.completed_todos || [],
-                            pending_todos: args.pending_todos || [],
-                            recent_decisions: args.recent_decisions || [],
+                            completed_todos,
+                            pending_todos,
+                            recent_decisions,
                             summary: String(args.summary),
                             timestamp: Math.floor(Date.now() / 1000)
                         });
