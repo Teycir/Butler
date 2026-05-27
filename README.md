@@ -1,5 +1,7 @@
 # 🌐 Butler
 
+![Butler](butler_banner.gif)
+
 > **Persistent Coordination and Memory Layer for AI Coding Agents.**
 >
 > *“Simple like Git. Persistent like Notion. Collaborative like Figma. AI-Native like Cursor.”*
