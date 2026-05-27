@@ -20,6 +20,10 @@ export type EventType =
   | 'MEMORY_EXTRACTED'
   | 'SNAPSHOT_CREATED';
 
+// Memory type constants - single source of truth
+export const MEMORY_TYPES = ['summary', 'decision', 'rule', 'wiki'] as const;
+export type MemoryType = typeof MEMORY_TYPES[number];
+
 export interface EventRecord {
   id: number;
   project_id: string;

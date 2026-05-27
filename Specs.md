@@ -388,7 +388,6 @@ Detect dead sessions safely.
 | alive      | actively heartbeating |
 | stale      | missed heartbeat      |
 | dead       | expired               |
-| recovering | replaying events      |
 
 ---
 
@@ -888,15 +887,6 @@ Each session has:
 * permissions
 
 ---
-
-# Permissions
-
-| Permission | Meaning          |
-| ---------- | ---------------- |
-| read       | retrieve context |
-| write      | emit events      |
-| admin      | manage rules     |
-
 ---
 
 # 27. Observability

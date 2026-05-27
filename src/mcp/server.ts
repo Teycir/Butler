@@ -17,6 +17,7 @@ import {
   invalidateProjectCache 
 } from '../events/materializer.js';
 import { appendEvent, getNextSequenceValue } from '../events/store.js';
+import { MEMORY_TYPES } from '../events/types.js';
 import { 
   processHeartbeat, 
   registerSession, 
@@ -31,6 +32,10 @@ export class ButlerMcpServer {
   private server: Server;
 
   constructor() {
+    // Note: Butler intentionally has no authentication layer.
+    // Any MCP-connected AI agent can read/write to any project by design.
+    // This is appropriate for local stdio transport where the security boundary
+    // is the user's machine. Project IDs and session IDs are the only identifiers.
     this.server = new Server(
       {
         name: 'butler-mcp',
@@ -746,10 +751,10 @@ export class ButlerMcpServer {
               throw new McpError(ErrorCode.InvalidParams, 'Memory content exceeds maximum length of 64KB');
             }
             
-            if (!['summary', 'decision', 'rule', 'wiki'].includes(type)) {
+            if (!MEMORY_TYPES.includes(type as any)) {
               throw new McpError(
                 ErrorCode.InvalidParams,
-                `Invalid memory type: ${type}. Must be one of 'summary', 'decision', 'rule', or 'wiki'.`
+                `Invalid memory type: ${type}. Must be one of ${MEMORY_TYPES.map(t => `'${t}'`).join(', ')}.`
               );
             }
 

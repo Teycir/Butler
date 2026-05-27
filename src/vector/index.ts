@@ -1,4 +1,5 @@
 import { getDb } from '../db/database.js';
+import { MEMORY_TYPES, MemoryType } from '../events/types.js';
 import {
   bufferToVector,
   vectorToBuffer,
@@ -10,7 +11,7 @@ import {
 export interface MemoryRecord {
   id: number;
   project_id: string;
-  type: 'summary' | 'decision' | 'rule' | 'wiki';
+  type: MemoryType;
   content: string;
   embedding: Float32Array | null;
   importance: number;
@@ -19,7 +20,7 @@ export interface MemoryRecord {
 
 export function addMemory(
   projectId: string,
-  type: 'summary' | 'decision' | 'rule' | 'wiki',
+  type: MemoryType,
   content: string,
   embeddingVector?: number[] | Float32Array,
   importance: number = 0.5
@@ -46,14 +47,13 @@ export function addMemory(
 
 export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
   const db = getDb();
-  const query = `
+  const rows = db.prepare(`
     SELECT id, project_id, type, content, embedding, importance, created_at
     FROM memories
     WHERE project_id = ?
     ORDER BY id DESC
-    ${limit ? `LIMIT ${limit}` : ''}
-  `;
-  const rows = db.prepare(query).all(projectId) as any[];
+    LIMIT ?
+  `).all(projectId, limit ?? -1) as any[]; // -1 means no limit in SQLite
 
   return rows.map(r => ({
     id: Number(r.id),

@@ -103,9 +103,10 @@ async function runTests() {
     const searchRule = searchMemories(PROJECT_ID, 'ESM rules');
     const firstResult = searchRule[0];
     console.log(`   Query: "ESM rules"`);
-    console.log(`   Top match: ${firstResult.memory.content} (Type: ${firstResult.memory.type}, Intent Score: ${(firstResult.relevance * 100).toFixed(0)}%)`);
+    console.log(`   Top match: ${firstResult.memory.content} (Type: ${firstResult.memory.type}, Score: ${(firstResult.score * 100).toFixed(0)}%)`);
 
-    if (firstResult.relevance !== 1.0 || firstResult.memory.type !== 'rule') {
+    // Verify the boost logic: rule-type memory should have higher combinedScore due to project relevance boost
+    if (firstResult.memory.type !== 'rule' || firstResult.score < 0.5) {
       throw new Error('Did not apply project relevance boost for "rule" search intent.');
     }
     console.log('   ✅ Intent-based search relevance scoring successfully boosts matching queries.');

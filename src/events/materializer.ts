@@ -45,7 +45,7 @@ export function createInitialState(): ProjectState {
 }
 
 // In-memory cache for materialized project states to support high-performance incremental updates
-const projectCache = new Map<string, { state: ProjectState; lastEventId: number }>();
+const projectCache = new Map<string, { state: ProjectState; lastEventId: number; lastSnapshotEventId: number }>();
 
 export function invalidateProjectCache(projectId: string): void {
   projectCache.delete(projectId);
@@ -162,6 +162,10 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
           payload: handoffData,
           source: event.type === 'HANDOFF_CREATED' ? 'agent' : 'system'
         });
+        // Cap handoffs to last 50 to prevent unbounded growth in snapshots
+        if (updatedState.handoffs.length > 50) {
+          updatedState.handoffs = updatedState.handoffs.slice(-50);
+        }
       }
       break;
     }
@@ -183,6 +187,7 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
   if (cached) {
     state = structuredClone(cached.state);
     startEventId = cached.lastEventId;
+    lastSnapshotEventId = cached.lastSnapshotEventId;
   } else {
     const latestSnapshot = getLatestSnapshot(projectId);
     state = createInitialState();
@@ -206,18 +211,20 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     eventCount++;
   }
 
-  projectCache.set(projectId, {
-    state: structuredClone(state),
-    lastEventId: state.lastEventId
-  });
-
   // Snapshot trigger: check events since last snapshot, not just events in this call
   if (triggerSnapshotCheck && state.lastEventId > 0) {
     const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
     if (eventsSinceSnapshot >= 100) {
       createSnapshot(projectId, state.lastEventId, state);
+      lastSnapshotEventId = state.lastEventId;
     }
   }
+
+  projectCache.set(projectId, {
+    state: structuredClone(state),
+    lastEventId: state.lastEventId,
+    lastSnapshotEventId: lastSnapshotEventId
+  });
 
   return state;
 }

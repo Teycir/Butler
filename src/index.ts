@@ -20,7 +20,11 @@ async function main() {
     await mcpServer.run();
 
     // 4. Register exit hooks for graceful release
+    let isShuttingDown = false;
     const cleanUp = () => {
+      if (isShuttingDown) return;
+      isShuttingDown = true;
+      
       stopLifecycleMonitor();
       
       // Trigger snapshot before shutdown

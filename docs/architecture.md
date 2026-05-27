@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
   client_type TEXT NOT NULL,
-  status TEXT CHECK(status IN ('alive', 'stale', 'dead', 'recovering')) DEFAULT 'alive',
+  status TEXT CHECK(status IN ('alive', 'stale', 'dead')) DEFAULT 'alive',
   last_heartbeat INTEGER NOT NULL,
   last_event_seen INTEGER DEFAULT 0,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
