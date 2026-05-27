@@ -1,5 +1,6 @@
 import { getDb } from '../db/database.js';
 import { EventPayloadMap, EventRecord, EventType } from './types.js';
+import { now as getCurrentTimestamp } from '../constants.js';
 
 export function appendEvent<T extends EventType>(
   projectId: string,
@@ -9,7 +10,7 @@ export function appendEvent<T extends EventType>(
 ): EventRecord {
   const db = getDb();
   const payloadStr = JSON.stringify(payload);
-  const now = Math.floor(Date.now() / 1000);
+  const now = getCurrentTimestamp();
 
   const result = db.prepare(`
     INSERT INTO events (project_id, session_id, type, payload, created_at)
@@ -101,7 +102,7 @@ export function getNextSequenceValue(projectId: string, name: string): number {
 
 export function createSnapshot(projectId: string, eventId: number, state: Record<string, any>): void {
   const db = getDb();
-  const now = Math.floor(Date.now() / 1000);
+  const now = getCurrentTimestamp();
   const stateStr = JSON.stringify(state);
 
   db.prepare(`

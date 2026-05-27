@@ -2,9 +2,13 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { getDb } from '../db/database.js';
 import { appendEvent, getSessionEvents } from '../events/store.js';
 import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
+import { validateProjectId, validateSessionId } from '../validation.js';
+import { SESSION_STALE_THRESHOLD_SECS, SESSION_DEAD_THRESHOLD_SECS, SNAPSHOT_CHECK_INTERVAL_SECS, now as getCurrentTimestamp } from '../constants.js';
 export function registerSession(projectId, sessionId, clientType) {
+    validateProjectId(projectId);
+    validateSessionId(sessionId);
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const registerTx = db.transaction(() => {
         // Verify/Insert project if not exists to satisfy foreign key constraints
         db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
@@ -82,7 +86,7 @@ export function getActiveSessions(projectId) {
 }
 export function processHeartbeat(projectId, sessionId) {
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const sess = getSession(sessionId);
     if (!sess) {
         throw new McpError(ErrorCode.InvalidRequest, `Session ${sessionId} is not registered in project ${projectId}. Please call session.register first.`);
@@ -119,7 +123,7 @@ export function updateLastEventSeen(sessionId, eventId) {
 export function gracefulDisconnect(projectId, sessionId) {
     validateSession(projectId, sessionId);
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const disconnectTx = db.transaction(() => {
         // NOTE: generateStructuredHandoff reads from the DB (getSession, getSessionEvents)
         // inside this write transaction. This is safe and intentional: it reads last_event_seen
@@ -204,23 +208,26 @@ export function generateStructuredHandoff(projectId, sessionId, type) {
         rules_added: rulesAdded,
         wiki_updated: wikiUpdated,
         summary,
-        timestamp: Math.floor(Date.now() / 1000)
+        timestamp: getCurrentTimestamp()
     };
 }
 let lifecycleTimer = null;
 export function startLifecycleMonitor(checkIntervalMs = 15000) {
     if (lifecycleTimer)
         return;
-    let lastSnapshotTime = Math.floor(Date.now() / 1000);
+    let lastSnapshotTime = getCurrentTimestamp();
     lifecycleTimer = setInterval(() => {
         const db = getDb();
-        const now = Math.floor(Date.now() / 1000);
-        // 1. Sessions transitioning to STALE (60s)
+        const now = getCurrentTimestamp();
+        // 1. Sessions transitioning to STALE (60s < age <= 300s)
+        // Upper bound prevents overlap with dead transition
         const staleRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen 
       FROM sessions
-      WHERE status = 'alive' AND (? - last_heartbeat) > 60
-    `).all(now);
+      WHERE status = 'alive' 
+        AND (? - last_heartbeat) > ?
+        AND (? - last_heartbeat) <= ?
+    `).all(now, SESSION_STALE_THRESHOLD_SECS, now, SESSION_DEAD_THRESHOLD_SECS);
         const staleTransition = db.transaction(() => {
             for (const row of staleRows) {
                 db.prepare(`UPDATE sessions SET status = 'stale' WHERE id = ?`).run(row.id);
@@ -235,13 +242,12 @@ export function startLifecycleMonitor(checkIntervalMs = 15000) {
         for (const row of staleRows) {
             invalidateProjectCache(row.project_id);
         }
-        // 2. Sessions transitioning to DEAD (300s / 5m)
-        // Only target 'stale' sessions to prevent overlap with stale transition above
+        // 2. Sessions transitioning to DEAD (age > 300s)
         const deadRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
       FROM sessions
-      WHERE status = 'stale' AND (? - last_heartbeat) > 300
-    `).all(now);
+      WHERE status = 'stale' AND (? - last_heartbeat) > ?
+    `).all(now, SESSION_DEAD_THRESHOLD_SECS);
         const deadTransition = db.transaction(() => {
             for (const row of deadRows) {
                 // Generate handoff BEFORE marking session dead to ensure getSession() reads correct state
@@ -261,8 +267,8 @@ export function startLifecycleMonitor(checkIntervalMs = 15000) {
         for (const row of deadRows) {
             invalidateProjectCache(row.project_id);
         }
-        // 3. Periodic snapshot check: Trigger snapshot checkpoint every 30 minutes (1800s)
-        if (now - lastSnapshotTime >= 1800) {
+        // 3. Periodic snapshot check
+        if (now - lastSnapshotTime >= SNAPSHOT_CHECK_INTERVAL_SECS) {
             lastSnapshotTime = now;
             try {
                 const activeProjects = db.prepare('SELECT id FROM projects').all();

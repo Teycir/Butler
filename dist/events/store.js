@@ -1,8 +1,9 @@
 import { getDb } from '../db/database.js';
+import { now as getCurrentTimestamp } from '../constants.js';
 export function appendEvent(projectId, sessionId, type, payload) {
     const db = getDb();
     const payloadStr = JSON.stringify(payload);
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const result = db.prepare(`
     INSERT INTO events (project_id, session_id, type, payload, created_at)
     VALUES (?, ?, ?, ?, ?)
@@ -80,7 +81,7 @@ export function getNextSequenceValue(projectId, name) {
 }
 export function createSnapshot(projectId, eventId, state) {
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const stateStr = JSON.stringify(state);
     db.prepare(`
     INSERT INTO snapshots (project_id, event_id, snapshot_json, created_at)

@@ -26,6 +26,7 @@ import {
   updateLastEventSeen
 } from '../coordinator/lifecycle.js';
 import { searchMemories, addMemory, getMemories, deleteMemory } from '../vector/index.js';
+import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle } from '../validation.js';
 
 export class ButlerMcpServer {
   private server: Server;
@@ -586,14 +587,7 @@ export class ButlerMcpServer {
       }
       
       const projectId = String(args.project_id);
-
-      // Validate project ID format
-      if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.`
-        );
-      }
+      validateProjectId(projectId);
       
       // Validate session_id format if present
       if (args.session_id !== undefined) {
@@ -603,12 +597,7 @@ export class ButlerMcpServer {
             `Invalid session_id: must be a non-empty string`
           );
         }
-        if (!/^[a-zA-Z0-9_-]+$/.test(String(args.session_id))) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Invalid session_id format. Only alphanumeric characters, underscores, and hyphens are allowed.`
-          );
-        }
+        validateSessionId(String(args.session_id));
       }
 
       try {
@@ -657,6 +646,7 @@ export class ButlerMcpServer {
             validateSession(projectId, String(args.session_id));
             const nextId = getNextSequenceValue(projectId, 'todo');
             
+            const title = sanitizeTitle(String(args.title));
             const priority = args.priority as 'low' | 'medium' | 'high' | undefined;
 
             const event = appendEvent(
@@ -665,7 +655,7 @@ export class ButlerMcpServer {
               'TODO_CREATED',
               {
                 todo_id: nextId,
-                title: String(args.title),
+                title,
                 priority: priority || 'medium'
               }
             );
@@ -762,7 +752,7 @@ export class ButlerMcpServer {
                 'TODO_UPDATED',
                 {
                   todo_id: todoId,
-                  title: args.title !== undefined ? String(args.title) : undefined,
+                  title: args.title !== undefined ? sanitizeTitle(String(args.title)) : undefined,
                   priority: args.priority as 'low' | 'medium' | 'high' | undefined,
                   status: args.status as 'pending' | 'completed' | undefined
                 }
@@ -834,15 +824,8 @@ export class ButlerMcpServer {
 
           case 'wiki.update': {
             validateSession(projectId, String(args.session_id));
-            const content = String(args.content);
-            const topic = String(args.topic);
-            
-            if (content.length > 65536) {
-              throw new McpError(ErrorCode.InvalidParams, 'Wiki content exceeds maximum length of 64KB');
-            }
-            if (topic.length > 256) {
-              throw new McpError(ErrorCode.InvalidParams, 'Wiki topic exceeds maximum length of 256 characters');
-            }
+            const topic = sanitizeTitle(String(args.topic));
+            const content = sanitizeInput(String(args.content), 65536);
             
             const event = appendEvent(
               projectId,
@@ -867,11 +850,7 @@ export class ButlerMcpServer {
 
           case 'rule.add': {
             validateSession(projectId, String(args.session_id));
-            const content = String(args.content);
-            
-            if (content.length > 4096) {
-              throw new McpError(ErrorCode.InvalidParams, 'Rule content exceeds maximum length of 4KB');
-            }
+            const content = sanitizeInput(String(args.content), 4096);
 
             const db = getDb();
             // Wrap in transaction: check-then-write to prevent duplicate rules racing in.
@@ -946,23 +925,18 @@ export class ButlerMcpServer {
 
           case 'decision.record': {
             validateSession(projectId, String(args.session_id));
-            const context = String(args.context);
-            const decision = String(args.decision);
-            
-            if (context.length > 8192) {
-              throw new McpError(ErrorCode.InvalidParams, 'Decision context exceeds maximum length of 8KB');
-            }
-            if (decision.length > 8192) {
-              throw new McpError(ErrorCode.InvalidParams, 'Decision text exceeds maximum length of 8KB');
-            }
+            const decisionId = sanitizeTitle(String(args.decision_id));
+            const title = sanitizeTitle(String(args.title));
+            const context = sanitizeInput(String(args.context), 8192);
+            const decision = sanitizeInput(String(args.decision), 8192);
             
             const event = appendEvent(
               projectId,
               String(args.session_id),
               'DECISION_RECORDED',
               {
-                decision_id: String(args.decision_id),
-                title: String(args.title),
+                decision_id: decisionId,
+                title,
                 context,
                 decision
               }
@@ -985,6 +959,7 @@ export class ButlerMcpServer {
             const completed_todos = (args.completed_todos as string[] | undefined) || [];
             const pending_todos = (args.pending_todos as string[] | undefined) || [];
             const recent_decisions = (args.recent_decisions as string[] | undefined) || [];
+            const summary = sanitizeInput(String(args.summary), 4096);
             
             if (completed_todos.length > 100) {
               throw new McpError(ErrorCode.InvalidParams, 'completed_todos exceeds maximum length of 100 items');
@@ -1005,7 +980,7 @@ export class ButlerMcpServer {
                 completed_todos,
                 pending_todos,
                 recent_decisions,
-                summary: String(args.summary),
+                summary,
                 timestamp: Math.floor(Date.now() / 1000)
               }
             );
@@ -1024,14 +999,10 @@ export class ButlerMcpServer {
 
           case 'memory.store': {
             const type = String(args.type);
-            const content = String(args.content);
+            const content = sanitizeInput(String(args.content), 65536);
             
             if (!content || content.trim().length === 0) {
               throw new McpError(ErrorCode.InvalidParams, 'Memory content cannot be empty');
-            }
-            
-            if (content.length > 65536) {
-              throw new McpError(ErrorCode.InvalidParams, 'Memory content exceeds maximum length of 64KB');
             }
             
             if (!MEMORY_TYPES.includes(type as any)) {

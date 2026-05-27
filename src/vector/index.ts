@@ -1,5 +1,6 @@
 import { getDb } from '../db/database.js';
 import { MemoryType } from '../events/types.js';
+import { MEMORY_SEARCH_LIMIT, now as getCurrentTimestamp } from '../constants.js';
 import {
   bufferToVector,
   vectorToBuffer,
@@ -26,7 +27,7 @@ export function addMemory(
   importance: number = 0.5
 ): MemoryRecord {
   const db = getDb();
-  const now = Math.floor(Date.now() / 1000);
+  const now = getCurrentTimestamp();
   const embeddingBlob = embeddingVector ? vectorToBuffer(embeddingVector) : null;
 
   const result = db.prepare(`
@@ -99,11 +100,8 @@ export function searchMemories(
   queryEmbedding?: Float32Array | number[],
   limit: number = 10
 ): SearchResult[] {
-  // Fetch only recent memories to bound memory and compute cost
-  // NOTE: TF-IDF scoring is done in-process on all 500 documents per search.
-  // For high-frequency search patterns, this will be the first bottleneck at scale.
-  // Consider adding a pre-computed inverted index if search latency becomes an issue.
-  const memories = getMemories(projectId, 500);
+  // Fetch recent memories to bound compute cost
+  const memories = getMemories(projectId, MEMORY_SEARCH_LIMIT);
   if (memories.length === 0) return [];
 
   const docs: SearchableDocument[] = memories.map(m => ({

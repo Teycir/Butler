@@ -1,8 +1,9 @@
 import { getDb } from '../db/database.js';
+import { MEMORY_SEARCH_LIMIT, now as getCurrentTimestamp } from '../constants.js';
 import { bufferToVector, vectorToBuffer, searchSparse, cosineSimilarity } from './similarity.js';
 export function addMemory(projectId, type, content, embeddingVector, importance = 0.5) {
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const now = getCurrentTimestamp();
     const embeddingBlob = embeddingVector ? vectorToBuffer(embeddingVector) : null;
     const result = db.prepare(`
     INSERT INTO memories (project_id, type, content, embedding, importance, created_at)
@@ -17,6 +18,15 @@ export function addMemory(projectId, type, content, embeddingVector, importance 
         importance,
         created_at: now
     };
+}
+/**
+ * Delete a memory by ID. Returns true if a row was deleted, false if the ID
+ * did not exist or belonged to a different project (prevents cross-project deletion).
+ */
+export function deleteMemory(projectId, memoryId) {
+    const db = getDb();
+    const result = db.prepare('DELETE FROM memories WHERE id = ? AND project_id = ?').run(memoryId, projectId);
+    return result.changes > 0;
 }
 export function getMemories(projectId, limit) {
     const db = getDb();
@@ -43,11 +53,8 @@ export function getMemories(projectId, limit) {
     }));
 }
 export function searchMemories(projectId, query, queryEmbedding, limit = 10) {
-    // Fetch only recent memories to bound memory and compute cost
-    // NOTE: TF-IDF scoring is done in-process on all 500 documents per search.
-    // For high-frequency search patterns, this will be the first bottleneck at scale.
-    // Consider adding a pre-computed inverted index if search latency becomes an issue.
-    const memories = getMemories(projectId, 500);
+    // Fetch recent memories to bound compute cost
+    const memories = getMemories(projectId, MEMORY_SEARCH_LIMIT);
     if (memories.length === 0)
         return [];
     const docs = memories.map(m => ({

@@ -1,5 +1,6 @@
 import { EventRecord, HandoffPayload } from './types.js';
 import { getEvents, getLatestSnapshot, createSnapshot } from './store.js';
+import { SNAPSHOT_EVENT_INTERVAL, HANDOFF_HISTORY_LIMIT } from '../constants.js';
 
 export interface TodoItem {
   id: number;
@@ -172,9 +173,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
           payload: handoffData,
           source: event.type === 'HANDOFF_CREATED' ? 'agent' : 'system'
         });
-        // Cap handoffs to last 50 to prevent unbounded growth in snapshots
-        if (updatedState.handoffs.length > 50) {
-          updatedState.handoffs = updatedState.handoffs.slice(-50);
+        // Cap handoffs to prevent unbounded growth
+        if (updatedState.handoffs.length > HANDOFF_HISTORY_LIMIT) {
+          updatedState.handoffs = updatedState.handoffs.slice(-HANDOFF_HISTORY_LIMIT);
         }
       }
       break;
@@ -224,14 +225,11 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     state = projectEvent(state, event);
   }
 
-  // Snapshot trigger: check count of events since last snapshot
-  // Formula: events.length (new events) + (startEventId - lastSnapshotEventId) (events counted in previous iterations)
-  // When cache is cold and no snapshot exists: startEventId=0, lastSnapshotEventId=0 → events.length
-  // When loading from snapshot: startEventId=snapshot.event_id, lastSnapshotEventId=snapshot.event_id → events.length
-  // When loading from cache: startEventId=cached.lastEventId, lastSnapshotEventId=cached.lastSnapshotEventId → correct cumulative count
+  // Snapshot trigger: calculate events since last snapshot
+  // Use absolute event IDs to avoid cumulative counting errors
   if (triggerSnapshotCheck && state.lastEventId > 0) {
-    const eventsSinceSnapshot = events.length + (startEventId - lastSnapshotEventId);
-    if (eventsSinceSnapshot >= 100) {
+    const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
+    if (eventsSinceSnapshot >= SNAPSHOT_EVENT_INTERVAL) {
       createSnapshot(projectId, state.lastEventId, state);
       lastSnapshotEventId = state.lastEventId;
     }

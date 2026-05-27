@@ -1,0 +1,35 @@
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { MAX_INPUT_LENGTH, MAX_TITLE_LENGTH } from './constants.js';
+
+export function validateProjectId(projectId: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.'
+    );
+  }
+}
+
+export function validateSessionId(sessionId: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'Invalid session_id format. Only alphanumeric characters, underscores, and hyphens are allowed.'
+    );
+  }
+}
+
+export function sanitizeInput(str: string, maxLength: number = MAX_INPUT_LENGTH): string {
+  if (str.length > maxLength) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Input exceeds maximum length of ${maxLength} characters`
+    );
+  }
+  // Remove control characters except newlines and tabs
+  return str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+export function sanitizeTitle(title: string): string {
+  return sanitizeInput(title, MAX_TITLE_LENGTH);
+}

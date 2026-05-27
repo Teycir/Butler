@@ -1,9 +1,10 @@
 import { getEvents, getLatestSnapshot, createSnapshot } from './store.js';
+import { SNAPSHOT_EVENT_INTERVAL, HANDOFF_HISTORY_LIMIT } from '../constants.js';
 export function createInitialState() {
     return {
         todos: {},
         wiki: {},
-        rules: [],
+        rules: {},
         decisions: {},
         handoffs: [],
         lastEventId: 0
@@ -18,7 +19,7 @@ export function projectEvent(state, event) {
     const updatedState = {
         todos: { ...state.todos },
         wiki: { ...state.wiki },
-        rules: [...state.rules],
+        rules: { ...state.rules },
         decisions: { ...state.decisions },
         handoffs: [...state.handoffs],
         lastEventId: event.id
@@ -88,15 +89,19 @@ export function projectEvent(state, event) {
             break;
         }
         case 'RULE_ADDED': {
+            const ruleId = String(payload.rule_id);
             const ruleContent = String(payload.content);
-            if (!updatedState.rules.includes(ruleContent)) {
-                updatedState.rules.push(ruleContent);
-            }
+            const existing = updatedState.rules[ruleId];
+            updatedState.rules[ruleId] = {
+                id: ruleId,
+                content: ruleContent,
+                version: existing ? existing.version + 1 : 1
+            };
             break;
         }
         case 'RULE_REMOVED': {
-            const ruleContent = String(payload.content);
-            updatedState.rules = updatedState.rules.filter(r => r !== ruleContent);
+            const ruleId = String(payload.rule_id);
+            delete updatedState.rules[ruleId];
             break;
         }
         case 'DECISION_RECORDED': {
@@ -122,9 +127,9 @@ export function projectEvent(state, event) {
                     payload: handoffData,
                     source: event.type === 'HANDOFF_CREATED' ? 'agent' : 'system'
                 });
-                // Cap handoffs to last 50 to prevent unbounded growth in snapshots
-                if (updatedState.handoffs.length > 50) {
-                    updatedState.handoffs = updatedState.handoffs.slice(-50);
+                // Cap handoffs to prevent unbounded growth
+                if (updatedState.handoffs.length > HANDOFF_HISTORY_LIMIT) {
+                    updatedState.handoffs = updatedState.handoffs.slice(-HANDOFF_HISTORY_LIMIT);
                 }
             }
             break;
@@ -167,14 +172,11 @@ export function materializeProject(projectId, triggerSnapshotCheck = true) {
     for (const event of events) {
         state = projectEvent(state, event);
     }
-    // Snapshot trigger: check count of events since last snapshot
-    // Formula: events.length (new events) + (startEventId - lastSnapshotEventId) (events counted in previous iterations)
-    // When cache is cold and no snapshot exists: startEventId=0, lastSnapshotEventId=0 → events.length
-    // When loading from snapshot: startEventId=snapshot.event_id, lastSnapshotEventId=snapshot.event_id → events.length
-    // When loading from cache: startEventId=cached.lastEventId, lastSnapshotEventId=cached.lastSnapshotEventId → correct cumulative count
+    // Snapshot trigger: calculate events since last snapshot
+    // Use absolute event IDs to avoid cumulative counting errors
     if (triggerSnapshotCheck && state.lastEventId > 0) {
-        const eventsSinceSnapshot = events.length + (startEventId - lastSnapshotEventId);
-        if (eventsSinceSnapshot >= 100) {
+        const eventsSinceSnapshot = state.lastEventId - lastSnapshotEventId;
+        if (eventsSinceSnapshot >= SNAPSHOT_EVENT_INTERVAL) {
             createSnapshot(projectId, state.lastEventId, state);
             lastSnapshotEventId = state.lastEventId;
         }
