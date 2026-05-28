@@ -90,10 +90,6 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id, type);
-CREATE INDEX IF NOT EXISTS idx_memories_source_event ON memories(source_event_id);
-CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_ref ON memories(project_id, type, source_ref)
-  WHERE source_ref IS NOT NULL;
 `;
 
 // ─── Versioned migrations ─────────────────────────────────────────────────────
@@ -147,6 +143,20 @@ export const VERSIONED_MIGRATIONS: Migration[] = [
     description: 'Add index on events(project_id, type) for eventsexport filtering',
     up: [`CREATE INDEX IF NOT EXISTS idx_events_project_type ON events(project_id, type)`],
     rollback: [`DROP INDEX IF EXISTS idx_events_project_type`]
+  },
+  {
+    version:     6,
+    description: 'Add indexes on memories(source_event_id, session_id, source_ref) after v4 column backfill',
+    up: [
+      `CREATE INDEX IF NOT EXISTS idx_memories_source_event ON memories(source_event_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_ref ON memories(project_id, type, source_ref) WHERE source_ref IS NOT NULL`
+    ],
+    rollback: [
+      `DROP INDEX IF EXISTS idx_memories_source_event`,
+      `DROP INDEX IF EXISTS idx_memories_session`,
+      `DROP INDEX IF EXISTS idx_memories_source_ref`
+    ]
   }
   // ── Add future migrations below this line ────────────────────────────────────
   // {
