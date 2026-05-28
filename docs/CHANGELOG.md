@@ -2,6 +2,48 @@
 
 ## [Unreleased] - 2026-05-28
 
+### Phase 4 — Developer Experience
+
+#### 4.1 — `butler status` CLI Command
+- New standalone CLI: `npm run status` (or `npx tsx src/cli/status.ts`)
+- Reads `.butler/butler.db` directly — no MCP server required
+- Prints: active sessions (alive/stale), open TODOs by priority, recent handoffs, conflicts, broadcasts, event log stats, and snapshot info
+- Supports `--project`, `--db`, `--json`, and `--help` flags
+- `--json` mode emits structured JSON for piping into `jq` or external tooling
+
+#### 4.2 — Web Dashboard (Local, Read-Only)
+- New local dashboard: `npm run dashboard` → `http://localhost:7888`
+- Live SSE push every 5 seconds — state updates without a page refresh
+- Shows: session heartbeat status, open TODOs with priority and claims, broadcasts, conflicts, and a 30-event scrolling event log
+- Purely observational — zero writes through the UI
+- Supports `--port`, `--host`, and `--db` flags
+
+#### 4.3 — `eventsexport` MCP Tool
+- New tool: `eventsexport` — exports the raw event log as `json` (array) or `ndjson` (one record per line)
+- Supports `since`, `until`, `session_id`, `event_type`, and `limit` filters
+- Default limit 500, max 5000; events returned in ascending ID order
+- Pairs with snapshot import for full backup/restore flows
+- 9 integration tests covering all filter combinations and edge cases
+
+#### 4.4 — Versioned Schema Migration Runner
+- Replaced the "swallow errors on ALTER TABLE" approach with a proper versioned migration system
+- `butler_migrations` tracking table logs every applied migration with version, description, and `applied_at` timestamp
+- Each migration runs inside a transaction — failure rolls back and surfaces a clear error message
+- Migrations are idempotent: applied exactly once, never re-run
+- `VERSIONED_MIGRATIONS` array in `schema.ts` is the single source of truth for all schema changes
+- Ships with 5 backfill migrations (v1–v4) and one index migration (v5) to bring pre-4.4 databases up to date
+- 5 integration tests covering table existence, all migrations applied, timestamps, idempotency, and the v5 index
+
+### Fixed
+- Build: removed unused `formatTimestamp` / `truncate` imports from `cli/dashboard.ts` and `cli/status.ts`
+- Build: removed unused `getRecentBroadcasts` function from `cli/status.ts`
+- Build: removed unused `getEvents` import from `coordinator/lifecycle.ts`
+- Build: fixed TypeScript type narrowing errors in `mcp/server.ts` `dispatchTool` — `Set.has()` now uses `as any` cast to satisfy strict literal union types from `as const` tool definitions
+
+---
+
+## [Unreleased] - 2026-05-28
+
 ### Phase 2 — Handoff Quality
 
 #### 2.1 — Smarter Handoff Summaries

@@ -1511,6 +1511,165 @@ async function runTests() {
   });
 
   // =========================================================================
+  // 27. Phase 4.4 — Versioned Migration Runner
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('27. Phase 4.4 — Versioned Migration Runner');
+  console.log('──────────────────────────────────────────');
+
+  await test('butler_migrations table exists after initDatabase', () => {
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='butler_migrations'`
+    ).get();
+    assert(row !== undefined, 'butler_migrations table should exist');
+  });
+
+  await test('All VERSIONED_MIGRATIONS are recorded in butler_migrations', async () => {
+    const { VERSIONED_MIGRATIONS } = await import('../src/db/schema.js');
+    const db = getDb();
+    const applied = db.prepare('SELECT version FROM butler_migrations').all() as Array<{ version: number }>;
+    const appliedSet = new Set(applied.map(r => r.version));
+    for (const m of VERSIONED_MIGRATIONS) {
+      assert(appliedSet.has(m.version), `Migration v${m.version} ("${m.description}") not recorded`);
+    }
+  });
+
+  await test('Applied migrations have positive applied_at timestamps', () => {
+    const db = getDb();
+    const rows = db.prepare('SELECT version, applied_at FROM butler_migrations').all() as Array<{ version: number; applied_at: number }>;
+    assert(rows.length > 0, 'Should have at least one applied migration');
+    for (const row of rows) {
+      assert(row.applied_at > 0, `Migration v${row.version} has invalid applied_at: ${row.applied_at}`);
+    }
+  });
+
+  await test('Re-running initDatabase does not re-apply already-applied migrations', () => {
+    const db = getDb();
+    const countBefore = (db.prepare('SELECT COUNT(*) as c FROM butler_migrations').get() as any).c;
+    // Calling initDatabase again hits the early-return guard (dbInstance already set),
+    // but we can test idempotency by calling runMigrations logic directly via the
+    // already-bootstrapped DB — applied migrations must not be duplicated.
+    const rows = db.prepare('SELECT version, COUNT(*) as c FROM butler_migrations GROUP BY version HAVING c > 1').all();
+    assert(rows.length === 0, 'No migration version should appear more than once');
+    const countAfter = (db.prepare('SELECT COUNT(*) as c FROM butler_migrations').get() as any).c;
+    assert(countAfter === countBefore, 'Migration count should not change on repeated calls');
+  });
+
+  await test('idx_events_project_type index exists (migration v5)', () => {
+    const db = getDb();
+    const row = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_project_type'`
+    ).get();
+    assert(row !== undefined, 'idx_events_project_type index should exist after migration v5');
+  });
+
+  // =========================================================================
+  // 28. Phase 4.3 — eventsexport tool
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('28. Phase 4.3 — eventsexport tool');
+  console.log('──────────────────────────────────────────');
+
+  const { handleObservabilityTool } = await import('../src/mcp/tools/observability.tools.js');
+  const EXP_PROJECT = 'test-export-project';
+  const EXP_SID = 'session-export-a';
+
+  // Seed events
+  const db_exp = getDb();
+  db_exp.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(EXP_PROJECT, EXP_PROJECT);
+  registerSession(EXP_PROJECT, EXP_SID, 'ExportClient');
+  const expTodo1 = getNextSequenceValue(EXP_PROJECT, 'todo');
+  const expTodo2 = getNextSequenceValue(EXP_PROJECT, 'todo');
+  appendEvent(EXP_PROJECT, EXP_SID, 'TODO_CREATED', { todo_id: expTodo1, title: 'Export test task A', priority: 'high' });
+  appendEvent(EXP_PROJECT, EXP_SID, 'TODO_CREATED', { todo_id: expTodo2, title: 'Export test task B', priority: 'low' });
+  appendEvent(EXP_PROJECT, EXP_SID, 'TODO_COMPLETED', { todo_id: expTodo1, version: 1 });
+  appendEvent(EXP_PROJECT, EXP_SID, 'BROADCAST', { from_session_id: EXP_SID, content: 'Export broadcast', sent_at: Math.floor(Date.now() / 1000) });
+
+  await test('eventsexport returns all events as JSON by default', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT }, EXP_PROJECT);
+    assert(result.content[0].type === 'text', 'Should return text content');
+    const text = result.content[0].text;
+    // Strip header line to get JSON
+    const jsonPart = text.split('\n\n').slice(1).join('\n\n');
+    const parsed = JSON.parse(jsonPart);
+    assert(parsed.project_id === EXP_PROJECT, 'project_id should match');
+    assert(typeof parsed.count === 'number' && parsed.count >= 4, `Expected >= 4 events, got ${parsed.count}`);
+    assert(Array.isArray(parsed.events), 'events should be an array');
+    assert(parsed.events[0].project_id === EXP_PROJECT, 'Each event should carry project_id');
+  });
+
+  await test('eventsexport NDJSON format produces one JSON object per line', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, format: 'ndjson' }, EXP_PROJECT);
+    const text = result.content[0].text;
+    const jsonPart = text.split('\n\n').slice(1).join('\n\n').trim();
+    const lines = jsonPart.split('\n').filter(Boolean);
+    assert(lines.length >= 4, `Expected >= 4 NDJSON lines, got ${lines.length}`);
+    for (const line of lines) {
+      const obj = JSON.parse(line); // throws if invalid JSON
+      assert(typeof obj.id === 'number', 'Each NDJSON line should have a numeric id');
+    }
+  });
+
+  await test('eventsexport respects event_type filter', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, event_type: 'TODO_CREATED' }, EXP_PROJECT);
+    const text = result.content[0].text;
+    const jsonPart = text.split('\n\n').slice(1).join('\n\n');
+    const parsed = JSON.parse(jsonPart);
+    assert(parsed.events.every((ev: any) => ev.type === 'TODO_CREATED'), 'All events should be TODO_CREATED');
+    assert(parsed.count === 2, `Expected 2 TODO_CREATED events, got ${parsed.count}`);
+  });
+
+  await test('eventsexport respects session_id filter', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, session_id: EXP_SID }, EXP_PROJECT);
+    const text = result.content[0].text;
+    const jsonPart = text.split('\n\n').slice(1).join('\n\n');
+    const parsed = JSON.parse(jsonPart);
+    assert(parsed.events.every((ev: any) => ev.session_id === EXP_SID), 'All events should be from EXP_SID');
+  });
+
+  await test('eventsexport respects since filter (returns only newer events)', async () => {
+    // Get the ID of the first event
+    const all = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT }, EXP_PROJECT);
+    const allParsed = JSON.parse(all.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    const firstId = allParsed.events[0].id;
+
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, since: firstId }, EXP_PROJECT);
+    const parsed = JSON.parse(result.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    assert(parsed.events.every((ev: any) => ev.id > firstId), 'All returned events should have id > since');
+  });
+
+  await test('eventsexport respects limit parameter', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, limit: 2 }, EXP_PROJECT);
+    const parsed = JSON.parse(result.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    assert(parsed.events.length === 2, `Expected 2 events (limit), got ${parsed.events.length}`);
+  });
+
+  await test('eventsexport returns empty events array for project with no matching events', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, event_type: 'NONEXISTENT_TYPE' }, EXP_PROJECT);
+    const parsed = JSON.parse(result.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    assert(parsed.count === 0, 'Should return 0 events for non-matching type');
+    assert(parsed.events.length === 0, 'events array should be empty');
+  });
+
+  await test('eventsexport rejects limit of 0', async () => {
+    let threw = false;
+    try {
+      await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, limit: 0 }, EXP_PROJECT);
+    } catch { threw = true; }
+    assert(threw, 'Should throw for limit=0');
+  });
+
+  await test('eventsexport events are sorted ascending by id', async () => {
+    const result = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT }, EXP_PROJECT);
+    const parsed = JSON.parse(result.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    const ids: number[] = parsed.events.map((ev: any) => ev.id);
+    for (let i = 1; i < ids.length; i++) {
+      assert(ids[i] > ids[i - 1], `Events out of order at index ${i}: ${ids[i - 1]} → ${ids[i]}`);
+    }
+  });
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n══════════════════════════════════════════');

@@ -109,7 +109,7 @@ announcements without targeting a specific agent.
 
 ---
 
-## Phase 4 — Developer Experience
+## Phase 4 — Developer Experience ✅
 **Goal: Butler is pleasant to observe, debug, and extend.**
 
 ### 4.1 — `butler status` CLI Command

@@ -36,9 +36,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, status);
 CREATE TABLE IF NOT EXISTS events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT    NOT NULL,
-  session_id TEXT    NOT NULL,  -- which agent wrote this event
+  session_id TEXT    NOT NULL,
   type       TEXT    NOT NULL,
-  payload    TEXT    NOT NULL,  -- JSON stringified payload
+  payload    TEXT    NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -47,10 +47,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_project_id_id ON events(project_id, id);
 -- Index for per-session audit queries
 CREATE INDEX IF NOT EXISTS idx_events_project_session ON events(project_id, session_id);
--- Index for time-range queries (e.g. "what happened in the last hour")
+-- Index for time-range queries
 CREATE INDEX IF NOT EXISTS idx_events_project_time ON events(project_id, created_at);
 
--- Sequences Table for atomic, race-free counter generation (e.g. TODO task IDs)
+-- Sequences Table for atomic, race-free counter generation
 CREATE TABLE IF NOT EXISTS sequences (
   project_id TEXT    NOT NULL,
   name       TEXT    NOT NULL,
@@ -60,57 +60,99 @@ CREATE TABLE IF NOT EXISTS sequences (
 );
 
 -- Snapshots Table
--- Stores periodic materialized state for fast startup.
--- Integrity: sha256_hex of snapshot_json stored alongside to detect corruption at load time.
 CREATE TABLE IF NOT EXISTS snapshots (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id    TEXT    NOT NULL,
-  event_id      INTEGER NOT NULL,  -- last event ID included in this snapshot
-  snapshot_json TEXT    NOT NULL,
-  sha256_hex    TEXT    NOT NULL,  -- hex-encoded SHA-256 of snapshot_json for integrity check
-  created_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id     TEXT    NOT NULL,
+  event_id       INTEGER NOT NULL,
+  snapshot_json  TEXT    NOT NULL,
+  sha256_hex     TEXT    NOT NULL DEFAULT '',
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at     INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (event_id) REFERENCES events(id)
 );
 
 -- Memories Table (Semantic Knowledge Base)
--- Stores embeddings for fuzzy/semantic search across summaries, decisions, rules, wiki.
--- source_event_id links back to the event that originated this memory, preventing drift.
 CREATE TABLE IF NOT EXISTS memories (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id     TEXT    NOT NULL,
-  type           TEXT    NOT NULL CHECK(type IN ('summary', 'decision', 'rule', 'wiki')),
-  content        TEXT    NOT NULL,
-  source_ref     TEXT,            -- canonical reference key (e.g. decision_id, wiki topic, rule_id)
-  source_event_id INTEGER,        -- event ID that produced this memory (traceability)
-  session_id     TEXT,            -- session that stored this memory (audit trail)
-  embedding      BLOB,            -- Optional Float32 binary embedding vector
-  importance     REAL    CHECK(importance >= 0.0 AND importance <= 1.0) DEFAULT 0.5,
-  created_at     INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id      TEXT    NOT NULL,
+  type            TEXT    NOT NULL CHECK(type IN ('summary', 'decision', 'rule', 'wiki')),
+  content         TEXT    NOT NULL,
+  source_ref      TEXT,
+  source_event_id INTEGER,
+  session_id      TEXT,
+  embedding       BLOB,
+  importance      REAL    CHECK(importance >= 0.0 AND importance <= 1.0) DEFAULT 0.5,
+  created_at      INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (source_event_id) REFERENCES events(id) ON DELETE SET NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
 );
 
--- Index for searching memories by project and type
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id, type);
--- Index for traceability: find memory from its source event
 CREATE INDEX IF NOT EXISTS idx_memories_source_event ON memories(source_event_id);
--- Index for session-based audit/purge queries
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
--- Unique index: one memory entry per source_ref per project (prevents drift duplicates)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_ref ON memories(project_id, type, source_ref)
   WHERE source_ref IS NOT NULL;
 `;
 
-// Schema migrations: add columns introduced after initial deployment.
-// Each statement is executed individually and errors are swallowed, making this
-// idempotent — safe to run on every startup against any DB version.
-export const MIGRATION_SQL = `
-ALTER TABLE sessions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'));
-ALTER TABLE snapshots ADD COLUMN sha256_hex TEXT NOT NULL DEFAULT '';
-ALTER TABLE snapshots ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE memories ADD COLUMN source_ref TEXT;
-ALTER TABLE memories ADD COLUMN source_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL;
-ALTER TABLE memories ADD COLUMN session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;
-`;
+// ─── Versioned migrations ─────────────────────────────────────────────────────
+//
+// This is the single migration system for Butler. Rules:
+//   - Versions are dense integers starting at 1 (no gaps, never reused).
+//   - Each migration runs inside a transaction; failure rolls back and surfaces
+//     a clear error — nothing is silently swallowed.
+//   - Migrations are applied exactly once, tracked in butler_migrations.
+//   - NEVER edit a migration after it has been shipped. Add a new one instead.
+//   - INIT_SCHEMA_SQL already includes all columns for fresh installs; migrations
+//     here exist to bring pre-existing databases up to date.
+
+export interface Migration {
+  version:     number;
+  description: string;
+  up:          string[];  // SQL statements run in a single transaction
+  rollback?:   string[];  // Declarative only — not auto-applied
+}
+
+export const VERSIONED_MIGRATIONS: Migration[] = [
+  // v1–v4: backfill columns added incrementally to pre-4.4 databases.
+  // Fresh installs already have these in INIT_SCHEMA_SQL; ALTER TABLE
+  // on a column that already exists is caught and ignored gracefully.
+  {
+    version:     1,
+    description: 'Backfill sessions.created_at for pre-4.4 databases',
+    up: [`ALTER TABLE sessions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))`]
+  },
+  {
+    version:     2,
+    description: 'Backfill snapshots.sha256_hex for pre-4.4 databases',
+    up: [`ALTER TABLE snapshots ADD COLUMN sha256_hex TEXT NOT NULL DEFAULT ''`]
+  },
+  {
+    version:     3,
+    description: 'Backfill snapshots.schema_version for pre-4.4 databases',
+    up: [`ALTER TABLE snapshots ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`]
+  },
+  {
+    version:     4,
+    description: 'Backfill memories.source_ref, source_event_id, session_id for pre-4.4 databases',
+    up: [
+      `ALTER TABLE memories ADD COLUMN source_ref TEXT`,
+      `ALTER TABLE memories ADD COLUMN source_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL`,
+      `ALTER TABLE memories ADD COLUMN session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL`
+    ]
+  },
+  {
+    version:     5,
+    description: 'Add index on events(project_id, type) for eventsexport filtering',
+    up: [`CREATE INDEX IF NOT EXISTS idx_events_project_type ON events(project_id, type)`],
+    rollback: [`DROP INDEX IF EXISTS idx_events_project_type`]
+  }
+  // ── Add future migrations below this line ────────────────────────────────────
+  // {
+  //   version:     6,
+  //   description: 'Short description of what changes and why',
+  //   up:          ['ALTER TABLE ...'],
+  //   rollback:    []
+  // }
+];

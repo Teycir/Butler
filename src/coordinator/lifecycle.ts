@@ -9,7 +9,7 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { getDb } from '../db/database.js';
-import { appendEvent, getEvents } from '../events/store.js';
+import { appendEvent } from '../events/store.js';
 import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
 import { validateProjectId, validateSessionId } from '../validation.js';
 import {

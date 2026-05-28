@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { createHash } from 'crypto';
-import { INIT_SCHEMA_SQL, MIGRATION_SQL } from './schema.js';
+import { INIT_SCHEMA_SQL, VERSIONED_MIGRATIONS, type Migration } from './schema.js';
 
 let dbInstance: Database.Database | null = null;
 
@@ -18,21 +18,61 @@ export function getDatabasePath(projectRoot: string = process.cwd()): string {
 }
 
 /**
- * Run additive schema migrations safely.
- * Each ALTER TABLE is attempted individually; errors are swallowed so the
- * function is idempotent — safe to call on every startup against any DB version.
+ * Versioned migration runner — the single migration system for Butler.
+ *
+ * On startup:
+ *   1. Bootstraps the butler_migrations tracking table if it doesn't exist yet.
+ *   2. Reads which versions have already been applied.
+ *   3. Applies pending migrations in version order, each inside a transaction.
+ *      On failure the transaction rolls back and an error is thrown with the
+ *      migration version and description so operators know exactly what failed.
+ *
+ * Each migration is applied exactly once and never re-applied.
+ * New schema changes go in VERSIONED_MIGRATIONS in schema.ts — not here.
  */
 function runMigrations(db: Database.Database): void {
-  const statements = MIGRATION_SQL
-    .split(';')
-    .map(s => s.trim())
-    .filter(Boolean);
+  // Bootstrap the tracking table first (idempotent).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS butler_migrations (
+      version     INTEGER PRIMARY KEY,
+      description TEXT    NOT NULL,
+      applied_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    )
+  `);
 
-  for (const sql of statements) {
+  const applied = new Set<number>(
+    (db.prepare('SELECT version FROM butler_migrations').all() as Array<{ version: number }>)
+      .map(r => r.version)
+  );
+
+  const pending = VERSIONED_MIGRATIONS
+    .filter(m => !applied.has(m.version))
+    .sort((a, b) => a.version - b.version);
+
+  for (const migration of pending) {
+    const apply = db.transaction((m: Migration) => {
+      for (const sql of m.up) {
+        try {
+          db.exec(sql);
+        } catch (err: any) {
+          // ALTER TABLE on an already-existing column is benign — skip it.
+          // Any other error is real and must propagate to abort the transaction.
+          if (/duplicate column/i.test(err.message)) continue;
+          throw err;
+        }
+      }
+      db.prepare('INSERT INTO butler_migrations (version, description) VALUES (?, ?)')
+        .run(m.version, m.description);
+    });
+
     try {
-      db.exec(sql + ';');
-    } catch {
-      // Column already exists or other benign error — skip
+      apply(migration);
+      console.error(`[Butler] Migration v${migration.version} applied: ${migration.description}`);
+    } catch (err: any) {
+      throw new Error(
+        `[Butler] Migration v${migration.version} ("${migration.description}") failed: ${err.message}. ` +
+        `Fix the schema manually or contact the Butler maintainers.`
+      );
     }
   }
 }
@@ -51,7 +91,7 @@ export function initDatabase(dbPath?: string): Database.Database {
   // Apply base schema (all CREATE IF NOT EXISTS — safe to re-run)
   db.exec(INIT_SCHEMA_SQL);
 
-  // Apply additive migrations for existing databases
+  // Apply versioned migrations
   runMigrations(db);
 
   dbInstance = db;
