@@ -25,8 +25,9 @@ import {
   validateSession,
   updateLastEventSeen
 } from '../coordinator/lifecycle.js';
+import { now as getCurrentTimestamp, SYSTEM_SESSION_ID } from '../constants.js';
 import { searchMemories, addMemory, getMemories, deleteMemory } from '../vector/index.js';
-import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle } from '../validation.js';
+import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle, sanitizeMarkdown } from '../validation.js';
 
 export class ButlerMcpServer {
   private server: Server;
@@ -250,6 +251,18 @@ The quality of collaboration depends on what every agent puts in.**
           const decisions = Object.values(state.decisions);
           const handoffs = state.handoffs.slice(-5); // Last 5 handoffs
 
+          // Build implicit memory query from current state signals
+          const signals: string[] = [];
+          const pendingTodos = todos.filter(t => t.status === 'pending');
+          if (pendingTodos.length > 0) signals.push(pendingTodos.map(t => t.title).join(' '));
+          if (decisions.length > 0) signals.push(decisions.map(d => d.title).join(' '));
+          if (wiki.length > 0) signals.push(wiki.map(w => w.topic).join(' '));
+          const implicitQuery = signals.join(' ').trim();
+          const MEMORY_RELEVANCE_THRESHOLD = 0.3;
+          const relevantMemories = implicitQuery
+            ? searchMemories(projectId, implicitQuery, undefined, 5).filter(r => r.score >= MEMORY_RELEVANCE_THRESHOLD)
+            : [];
+
           // Build a beautiful unified markdown context packet for zero-click context hydration!
           let markdownContext = `# butler: Unified Project Context [Project: ${projectId}]\n\n`;
 
@@ -278,7 +291,7 @@ The quality of collaboration depends on what every agent puts in.**
             for (const h of handoffs) {
               const sourceLabel = (h as any).source === 'agent' ? '📝 Agent-Narrated' : '🤖 System-Generated';
               markdownContext += `### ${sourceLabel} Handoff from ${h.session_id} (${new Date(h.timestamp * 1000).toISOString()})\n`;
-              markdownContext += `> ${h.summary.replace(/\n/g, '\n> ')}\n`;
+              markdownContext += `> ${sanitizeMarkdown(h.summary).replace(/\n/g, '\n> ')}\n`;
               if (h.payload.completed_todos?.length > 0) {
                 markdownContext += `**Completed:** ${h.payload.completed_todos.join(', ')}\n`;
               }
@@ -307,13 +320,13 @@ The quality of collaboration depends on what every agent puts in.**
           } else {
             for (const t of pending) {
               const priorityEmoji = t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '🟢';
-              markdownContext += `- [ ] [ID ${t.id}] **${t.title}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version})\n`;
+              markdownContext += `- [ ] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version})\n`;
             }
           }
           if (completed.length > 0) {
             markdownContext += `\n**Completed Tasks:**\n`;
             for (const t of completed.slice(-5)) { // Show last 5 completed
-              markdownContext += `- [x] [ID ${t.id}] **${t.title}** (Version: ${t.version})\n`;
+              markdownContext += `- [x] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Version: ${t.version})\n`;
             }
             if (completed.length > 5) {
               markdownContext += `\n_...and ${completed.length - 5} more completed task(s)._\n`;
@@ -327,7 +340,7 @@ The quality of collaboration depends on what every agent puts in.**
             markdownContext += `- No active project coding guidelines. Add one with \`rule.add\`!\n`;
           } else {
             for (const rule of rulesList) {
-              markdownContext += `- [${rule.id}] ${rule.content}\n`;
+              markdownContext += `- [${rule.id}] ${sanitizeMarkdown(rule.content)}\n`;
             }
           }
           markdownContext += `\n`;
@@ -337,9 +350,9 @@ The quality of collaboration depends on what every agent puts in.**
             markdownContext += `- No formal design decisions recorded yet.\n`;
           } else {
             for (const d of decisions) {
-              markdownContext += `### Decision: ${d.title} (ID: ${d.id})\n`;
-              markdownContext += `**Context:** ${d.context}\n`;
-              markdownContext += `**Outcome/Decision:** ${d.decision}\n\n`;
+              markdownContext += `### Decision: ${sanitizeMarkdown(d.title)} (ID: ${d.id})\n`;
+              markdownContext += `**Context:** ${sanitizeMarkdown(d.context)}\n`;
+              markdownContext += `**Outcome/Decision:** ${sanitizeMarkdown(d.decision)}\n\n`;
             }
           }
 
@@ -348,8 +361,20 @@ The quality of collaboration depends on what every agent puts in.**
             markdownContext += `- Wiki is currently empty.\n`;
           } else {
             for (const page of wiki) {
-              markdownContext += `### Topic: ${page.topic}\n${page.content}\n\n`;
+              markdownContext += `### Topic: ${sanitizeMarkdown(page.topic)}\n${sanitizeMarkdown(page.content)}\n\n`;
             }
+          }
+
+          if (relevantMemories.length > 0) {
+            markdownContext += `\n## 🧠 Relevant Memory\n`;
+            markdownContext += `_Automatically surfaced from project memory based on current context._\n\n`;
+            for (const r of relevantMemories) {
+              const typeLabel = r.memory.type.charAt(0).toUpperCase() + r.memory.type.slice(1);
+              const recencyDays = Math.floor((Date.now() / 1000 - r.memory.created_at) / 86400);
+              const recencyStr = recencyDays === 0 ? 'today' : recencyDays === 1 ? '1 day ago' : `${recencyDays} days ago`;
+              markdownContext += `- **[${typeLabel}]** ${sanitizeMarkdown(r.memory.content)} _(importance: ${r.memory.importance.toFixed(1)}, ${recencyStr})_\n`;
+            }
+            markdownContext += `\n`;
           }
 
           const rawData = {
@@ -359,7 +384,15 @@ The quality of collaboration depends on what every agent puts in.**
             open_todos: pending,
             rules: state.rules,
             decisions,
-            wiki
+            wiki,
+            relevant_memories: relevantMemories.map(r => ({
+              id: r.memory.id,
+              type: r.memory.type,
+              content: r.memory.content,
+              importance: r.memory.importance,
+              score: r.score,
+              created_at: r.memory.created_at
+            }))
           };
 
           return {
@@ -1055,7 +1088,7 @@ The quality of collaboration depends on what every agent puts in.**
                 pending_todos,
                 recent_decisions,
                 summary,
-                timestamp: Math.floor(Date.now() / 1000)
+                timestamp: getCurrentTimestamp()
               }
             );
             updateLastEventSeen(String(args.session_id), event.id);
@@ -1100,7 +1133,10 @@ The quality of collaboration depends on what every agent puts in.**
               type as any,
               content,
               undefined,
-              args.importance !== undefined ? Number(args.importance) : 0.5
+              args.importance !== undefined ? Number(args.importance) : 0.5,
+              undefined,
+              undefined,
+              args.session_id ? String(args.session_id) : undefined
             );
             return {
               content: [
@@ -1197,7 +1233,7 @@ The quality of collaboration depends on what every agent puts in.**
               // Hard-delete from the memories table (memories are not event-sourced state)
               deleteMemory(projectId, memoryId);
               // Append audit event so there is a record of the deletion in the event log
-              const sessionIdForEvent = args.session_id ? String(args.session_id) : 'system';
+              const sessionIdForEvent = args.session_id ? String(args.session_id) : SYSTEM_SESSION_ID;
               appendEvent(projectId, sessionIdForEvent, 'MEMORY_DELETED', { memory_id: memoryId });
             });
 

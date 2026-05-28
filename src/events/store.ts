@@ -1,6 +1,6 @@
 import { getDb, sha256hex } from '../db/database.js';
 import { EventPayloadMap, EventRecord, EventType } from './types.js';
-import { now as getCurrentTimestamp } from '../constants.js';
+import { now as getCurrentTimestamp, SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_RETENTION_COUNT } from '../constants.js';
 
 export function appendEvent<T extends EventType>(
   projectId: string,
@@ -107,18 +107,18 @@ export function createSnapshot(projectId: string, eventId: number, state: Record
   const checksum = sha256hex(stateStr);
 
   db.prepare(`
-    INSERT INTO snapshots (project_id, event_id, snapshot_json, sha256_hex, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(projectId, eventId, stateStr, checksum, now);
+    INSERT INTO snapshots (project_id, event_id, snapshot_json, sha256_hex, schema_version, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(projectId, eventId, stateStr, checksum, SNAPSHOT_SCHEMA_VERSION, now);
 
-  // Keep last 3 snapshots for recovery fallback
+  // Keep last N snapshots for recovery fallback
   db.prepare(`
     DELETE FROM snapshots 
     WHERE project_id = ? AND event_id NOT IN (
       SELECT event_id FROM snapshots 
       WHERE project_id = ? 
       ORDER BY event_id DESC 
-      LIMIT 3
+      LIMIT ${SNAPSHOT_RETENTION_COUNT}
     )
   `).run(projectId, projectId);
 }
@@ -134,9 +134,9 @@ export interface SnapshotRecord {
 export function getLatestSnapshot(projectId: string): SnapshotRecord | null {
   const db = getDb();
 
-  // Try snapshots newest-first; skip any that fail integrity check
+  // Try snapshots newest-first; skip any that fail integrity or schema version checks
   const rows = db.prepare(`
-    SELECT id, project_id, event_id, snapshot_json, sha256_hex, created_at
+    SELECT id, project_id, event_id, snapshot_json, sha256_hex, schema_version, created_at
     FROM snapshots
     WHERE project_id = ?
     ORDER BY event_id DESC
@@ -144,7 +144,17 @@ export function getLatestSnapshot(projectId: string): SnapshotRecord | null {
   `).all(projectId) as any[];
 
   for (const row of rows) {
-    // Legacy snapshots (sha256_hex = '') are accepted without validation
+    // Schema version check: reject snapshots written by a different schema version
+    const snapshotSchemaVersion = row.schema_version ?? 1;
+    if (snapshotSchemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
+      console.error(
+        `Snapshot schema version mismatch for project ${projectId} at event_id ${row.event_id} ` +
+        `(snapshot: v${snapshotSchemaVersion}, current: v${SNAPSHOT_SCHEMA_VERSION}) — skipping`
+      );
+      continue;
+    }
+
+    // Integrity check: legacy snapshots (sha256_hex = '') are accepted without validation
     if (row.sha256_hex && row.sha256_hex !== '') {
       const expected = sha256hex(row.snapshot_json);
       if (expected !== row.sha256_hex) {
@@ -154,6 +164,7 @@ export function getLatestSnapshot(projectId: string): SnapshotRecord | null {
         continue;
       }
     }
+
     return {
       id: Number(row.id),
       project_id: row.project_id,

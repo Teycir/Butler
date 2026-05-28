@@ -14,8 +14,9 @@ import {
   stopLifecycleMonitor,
 } from '../src/coordinator/lifecycle.js';
 import { addMemory, deleteMemory, searchMemories, getMemories } from '../src/vector/index.js';
-import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle } from '../src/validation.js';
+import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle, sanitizeMarkdown } from '../src/validation.js';
 import { getDb } from '../src/db/database.js';
+import { SNAPSHOT_SCHEMA_VERSION } from '../src/constants.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -995,6 +996,249 @@ async function runTests() {
 
     assert(count <= 3, `Expected at most 3 snapshots, got ${count}`);
     assert(count >= 1, 'Expected at least 1 snapshot to exist');
+  });
+
+  // =========================================================================
+  // 19. PROMPT INJECTION SANITIZATION — sanitizeMarkdown
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('19. Prompt Injection Sanitization');
+  console.log('──────────────────────────────────────────');
+
+  await test('sanitizeMarkdown escapes header markers', () => {
+    const result = sanitizeMarkdown('# Injected Header');
+    assert(!result.startsWith('#'), 'Leading # should be escaped');
+    assert(result.includes('\\#'), 'Should contain escaped #');
+  });
+
+  await test('sanitizeMarkdown escapes backticks', () => {
+    const result = sanitizeMarkdown('```js\nconsole.log("pwned")\n```');
+    assert(!result.includes('```'), 'Triple backticks should be escaped');
+    assert(result.includes('\\`'), 'Should contain escaped backtick');
+  });
+
+  await test('sanitizeMarkdown escapes blockquote markers', () => {
+    const result = sanitizeMarkdown('> Injected blockquote');
+    assert(!result.startsWith('>'), 'Leading > should be escaped');
+    assert(result.includes('\\>'), 'Should contain escaped >');
+  });
+
+  await test('sanitizeMarkdown escapes bold/italic markers', () => {
+    const result = sanitizeMarkdown('**bold** and _italic_');
+    assert(result.includes('\\*\\*'), 'Bold markers should be escaped');
+    assert(result.includes('\\_'), 'Italic markers should be escaped');
+  });
+
+  await test('sanitizeMarkdown escapes link brackets', () => {
+    const result = sanitizeMarkdown('[click me](http://evil.com)');
+    assert(result.includes('\\['), 'Opening bracket should be escaped');
+    assert(result.includes('\\]'), 'Closing bracket should be escaped');
+  });
+
+  await test('sanitizeMarkdown preserves newlines', () => {
+    const result = sanitizeMarkdown('line one\nline two');
+    assert(result.includes('\n'), 'Newlines should be preserved');
+    assert(result.includes('line one'), 'Content before newline preserved');
+    assert(result.includes('line two'), 'Content after newline preserved');
+  });
+
+  await test('sanitizeMarkdown is idempotent on plain text', () => {
+    const plain = 'plain text with no special chars 123';
+    const result = sanitizeMarkdown(plain);
+    assert(result === plain, 'Plain text should be unchanged');
+  });
+
+  await test('sanitizeMarkdown handles empty string', () => {
+    const result = sanitizeMarkdown('');
+    assert(result === '', 'Empty string should remain empty');
+  });
+
+  // =========================================================================
+  // 20. SNAPSHOT SCHEMA VERSIONING
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('20. Snapshot Schema Versioning');
+  console.log('──────────────────────────────────────────');
+
+  await test('Snapshots are written with current SNAPSHOT_SCHEMA_VERSION', () => {
+    const PROJECT_SV = 'project-schema-version';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_SV, PROJECT_SV);
+
+    for (let i = 0; i < 105; i++) {
+      appendEvent(PROJECT_SV, 'agent-sv', 'RULE_ADDED', { rule_id: randomUUID(), content: `SV rule ${i}` });
+    }
+    invalidateProjectCache(PROJECT_SV);
+    materializeProject(PROJECT_SV, true);
+
+    const row = db.prepare(
+      'SELECT schema_version FROM snapshots WHERE project_id = ? ORDER BY event_id DESC LIMIT 1'
+    ).get(PROJECT_SV) as any;
+    assert(row !== undefined, 'Snapshot should exist');
+    assert(row.schema_version === SNAPSHOT_SCHEMA_VERSION,
+      `Expected schema_version ${SNAPSHOT_SCHEMA_VERSION}, got ${row.schema_version}`);
+  });
+
+  await test('Snapshot with wrong schema_version is skipped, state rebuilt from events', () => {
+    const PROJECT_SV2 = 'project-schema-mismatch';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_SV2, PROJECT_SV2);
+
+    // Write a TODO so we have something to verify in the rebuilt state
+    const todoId = getNextSequenceValue(PROJECT_SV2, 'todo');
+    appendEvent(PROJECT_SV2, 'agent-sv2', 'TODO_CREATED', { todo_id: todoId, title: 'Schema test task', priority: 'high' });
+
+    // Force a snapshot
+    for (let i = 0; i < 105; i++) {
+      appendEvent(PROJECT_SV2, 'agent-sv2', 'RULE_ADDED', { rule_id: randomUUID(), content: `SV2 rule ${i}` });
+    }
+    invalidateProjectCache(PROJECT_SV2);
+    materializeProject(PROJECT_SV2, true);
+
+    // Corrupt the schema_version to simulate a future version mismatch
+    db.prepare(
+      `UPDATE snapshots SET schema_version = 999
+       WHERE project_id = ? AND event_id = (SELECT MAX(event_id) FROM snapshots WHERE project_id = ?)`
+    ).run(PROJECT_SV2, PROJECT_SV2);
+
+    // Cold-load should skip the bad snapshot and replay from scratch
+    invalidateProjectCache(PROJECT_SV2);
+    let state: any;
+    let threw = false;
+    try {
+      state = materializeProject(PROJECT_SV2, false);
+    } catch {
+      threw = true;
+    }
+    assert(!threw, 'Should not throw on schema version mismatch — should fallback gracefully');
+    assert(state !== undefined && typeof state.todos === 'object', 'State should be valid after fallback');
+    assert(state.todos[todoId] !== undefined, 'TODO written before snapshot should still appear after replay');
+    assert(state.todos[todoId].title === 'Schema test task', 'TODO title should be correct after replay');
+  });
+
+  // =========================================================================
+  // 21. SESSION_ID ATTRIBUTION ON MEMORIES
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('21. Memory session_id Attribution');
+  console.log('──────────────────────────────────────────');
+
+  await test('Memory stored with session_id persists attribution', () => {
+    const mem = addMemory(PROJECT_ID, 'summary', 'Session-attributed memory', undefined, 0.7, undefined, undefined, CLIENT_A);
+    assert(mem.session_id === CLIENT_A, `Expected session_id ${CLIENT_A}, got ${mem.session_id}`);
+
+    const list = getMemories(PROJECT_ID);
+    const found = list.find(m => m.id === mem.id);
+    assert(found !== undefined, 'Memory should appear in getMemories');
+    assert(found!.session_id === CLIENT_A, 'session_id should be persisted to DB');
+  });
+
+  await test('Memory stored without session_id has null session_id', () => {
+    const mem = addMemory(PROJECT_ID, 'summary', 'Unattributed memory', undefined, 0.5);
+    assert(mem.session_id === null, `Expected null session_id, got ${mem.session_id}`);
+
+    const list = getMemories(PROJECT_ID);
+    const found = list.find(m => m.id === mem.id);
+    assert(found !== undefined, 'Memory should appear in getMemories');
+    assert(found!.session_id === null, 'session_id should be null in DB');
+  });
+
+  await test('Upsert on same source_ref updates session_id', () => {
+    addMemory(PROJECT_ID, 'rule', 'Rule with session', undefined, 0.8, 'RULE-SESSION-A', undefined, CLIENT_A);
+    addMemory(PROJECT_ID, 'rule', 'Rule with session updated', undefined, 0.9, 'RULE-SESSION-A', undefined, CLIENT_B);
+
+    const list = getMemories(PROJECT_ID);
+    const found = list.find(m => m.source_ref === 'RULE-SESSION-A');
+    assert(found !== undefined, 'Memory should exist');
+    assert(found!.session_id === CLIENT_B, `session_id should be updated to ${CLIENT_B}`);
+    assert(found!.content === 'Rule with session updated', 'Content should be updated');
+  });
+
+  await test('Different sessions produce independently attributed memories', () => {
+    const memA = addMemory(PROJECT_ID, 'summary', 'From session A', undefined, 0.5, undefined, undefined, CLIENT_A);
+    const memB = addMemory(PROJECT_ID, 'summary', 'From session B', undefined, 0.5, undefined, undefined, CLIENT_B);
+    assert(memA.session_id === CLIENT_A, 'memA should be attributed to CLIENT_A');
+    assert(memB.session_id === CLIENT_B, 'memB should be attributed to CLIENT_B');
+    assert(memA.id !== memB.id, 'Should be stored as separate records');
+  });
+
+  // =========================================================================
+  // 22. IMPLICIT MEMORY INJECTION IN CONTEXT
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('22. Implicit Memory Injection');
+  console.log('──────────────────────────────────────────');
+
+  const PROJECT_IMC = 'project-implicit-memory';
+  const db_imc = getDb();
+  db_imc.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_IMC, PROJECT_IMC);
+  registerSession(PROJECT_IMC, 'imc-agent', 'TestAgent');
+
+  await test('searchMemories returns relevant memory for matching query', () => {
+    addMemory(PROJECT_IMC, 'rule', 'Always use WAL mode for SQLite connections', undefined, 0.9);
+    addMemory(PROJECT_IMC, 'wiki', 'Setup guide for the CI pipeline', undefined, 0.7);
+
+    const results = searchMemories(PROJECT_IMC, 'SQLite WAL mode database', undefined, 5);
+    assert(results.length > 0, 'Should return at least one result');
+    const topMemory = results[0];
+    assert(topMemory.memory.content.includes('WAL'), 'Top result should be the WAL memory');
+  });
+
+  await test('searchMemories with unrelated query has zero TF-IDF relevance score', () => {
+    // Use a fresh isolated project with known memories
+    const PROJECT_NOISE = 'project-noise-test';
+    const db_noise = getDb();
+    db_noise.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_NOISE, PROJECT_NOISE);
+    addMemory(PROJECT_NOISE, 'rule', 'Always use WAL mode for SQLite connections', undefined, 0.9);
+    addMemory(PROJECT_NOISE, 'wiki', 'Setup guide for the CI pipeline', undefined, 0.7);
+
+    // A query with no token overlap whatsoever — TF-IDF relevance should be 0
+    // Note: combined score still includes recency (0.2) + importance (0.2) + projectRelevance (0.05)
+    // so the *relevance* component (TF-IDF weight) is what we assert is zero
+    const results = searchMemories(PROJECT_NOISE, 'xyzzy-completely-unrelated-token-zqvw', undefined, 5);
+    assert(results.length > 0, 'Should still return results (all memories scored)');
+    for (const r of results) {
+      assert(r.relevance === 0, `TF-IDF relevance should be 0 for unrelated query, got ${r.relevance}`);
+    }
+  });
+
+  await test('Relevant memory signals are built from pending TODOs and wiki topics', () => {
+    // Add a TODO and a matching memory
+    const todoId = getNextSequenceValue(PROJECT_IMC, 'todo');
+    appendEvent(PROJECT_IMC, 'imc-agent', 'TODO_CREATED', {
+      todo_id: todoId,
+      title: 'Optimize SQLite write performance',
+      priority: 'high'
+    });
+    addMemory(PROJECT_IMC, 'decision', 'SQLite WAL mode chosen for write performance optimization', undefined, 0.9);
+
+    invalidateProjectCache(PROJECT_IMC);
+    const state = materializeProject(PROJECT_IMC, false);
+
+    // Build the same signal query the context resource would use
+    const pending = Object.values(state.todos).filter((t: any) => t.status === 'pending');
+    const signals: string[] = [];
+    if (pending.length > 0) signals.push(pending.map((t: any) => t.title).join(' '));
+
+    const implicitQuery = signals.join(' ').trim();
+    assert(implicitQuery.length > 0, 'Implicit query should not be empty');
+
+    const results = searchMemories(PROJECT_IMC, implicitQuery, undefined, 5);
+    const aboveThreshold = results.filter(r => r.score >= 0.3);
+    assert(aboveThreshold.length > 0, 'Should surface at least one memory above threshold for matching TODO signal');
+  });
+
+  await test('Empty memory store produces no relevant_memories (no noise)', () => {
+    const PROJECT_EMPTY_MEM = 'project-empty-mem';
+    db_imc.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_EMPTY_MEM, PROJECT_EMPTY_MEM);
+    appendEvent(PROJECT_EMPTY_MEM, 'agent-empty', 'TODO_CREATED', {
+      todo_id: 1, title: 'Some task', priority: 'low'
+    });
+    invalidateProjectCache(PROJECT_EMPTY_MEM);
+
+    const results = searchMemories(PROJECT_EMPTY_MEM, 'Some task', undefined, 5);
+    assert(Array.isArray(results), 'Should return array even when store is empty');
+    assert(results.length === 0, 'Empty store should return no results');
   });
 
   // =========================================================================

@@ -33,3 +33,19 @@ export function sanitizeInput(str: string, maxLength: number = MAX_INPUT_LENGTH)
 export function sanitizeTitle(title: string): string {
   return sanitizeInput(title, MAX_TITLE_LENGTH);
 }
+
+/**
+ * Escapes markdown control characters in user-supplied strings before embedding
+ * them in a markdown template. Prevents prompt injection via crafted content.
+ *
+ * Applies to: handoff summaries, wiki content/topics, rule content,
+ * decision titles/context/decision fields.
+ *
+ * Does NOT apply to the raw JSON resource — only to the markdown render path.
+ *
+ * Characters escaped: # ` * _ [ ] > \ |
+ * Newlines are preserved (they are structural in markdown blockquotes).
+ */
+export function sanitizeMarkdown(str: string): string {
+  return str.replace(/([#`*_[\]>\\|])/g, '\\$1');
+}

@@ -83,17 +83,21 @@ CREATE TABLE IF NOT EXISTS memories (
   content        TEXT    NOT NULL,
   source_ref     TEXT,            -- canonical reference key (e.g. decision_id, wiki topic, rule_id)
   source_event_id INTEGER,        -- event ID that produced this memory (traceability)
+  session_id     TEXT,            -- session that stored this memory (audit trail)
   embedding      BLOB,            -- Optional Float32 binary embedding vector
   importance     REAL    CHECK(importance >= 0.0 AND importance <= 1.0) DEFAULT 0.5,
   created_at     INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-  FOREIGN KEY (source_event_id) REFERENCES events(id) ON DELETE SET NULL
+  FOREIGN KEY (source_event_id) REFERENCES events(id) ON DELETE SET NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
 );
 
 -- Index for searching memories by project and type
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id, type);
 -- Index for traceability: find memory from its source event
 CREATE INDEX IF NOT EXISTS idx_memories_source_event ON memories(source_event_id);
+-- Index for session-based audit/purge queries
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 -- Unique index: one memory entry per source_ref per project (prevents drift duplicates)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_ref ON memories(project_id, type, source_ref)
   WHERE source_ref IS NOT NULL;
@@ -105,6 +109,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_ref ON memories(project_id
 export const MIGRATION_SQL = `
 ALTER TABLE sessions ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'));
 ALTER TABLE snapshots ADD COLUMN sha256_hex TEXT NOT NULL DEFAULT '';
+ALTER TABLE snapshots ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE memories ADD COLUMN source_ref TEXT;
 ALTER TABLE memories ADD COLUMN source_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL;
+ALTER TABLE memories ADD COLUMN session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;
 `;

@@ -16,6 +16,7 @@ export interface MemoryRecord {
   content: string;
   source_ref: string | null;
   source_event_id: number | null;
+  session_id: string | null;
   embedding: Float32Array | null;
   importance: number;
   created_at: number;
@@ -28,30 +29,40 @@ export function addMemory(
   embeddingVector?: number[] | Float32Array,
   importance: number = 0.5,
   sourceRef?: string,
-  sourceEventId?: number
+  sourceEventId?: number,
+  sessionId?: string
 ): MemoryRecord {
   const db = getDb();
   const now = getCurrentTimestamp();
   const embeddingBlob = embeddingVector ? vectorToBuffer(embeddingVector) : null;
 
   const result = db.prepare(`
-    INSERT INTO memories (project_id, type, content, source_ref, source_event_id, embedding, importance, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO memories (project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id, type, source_ref) WHERE source_ref IS NOT NULL
     DO UPDATE SET content = excluded.content, source_event_id = excluded.source_event_id,
+                  session_id = excluded.session_id,
                   embedding = excluded.embedding, importance = excluded.importance
-  `).run(projectId, type, content, sourceRef ?? null, sourceEventId ?? null, embeddingBlob, importance, now);
+  `).run(projectId, type, content, sourceRef ?? null, sourceEventId ?? null, sessionId ?? null, embeddingBlob, importance, now);
+
+  const rowId = Number(result.lastInsertRowid);
+
+  // Re-fetch created_at from the DB: on an upsert conflict the row is updated in-place,
+  // so `now` is wrong for the returned record (the original created_at is preserved).
+  const stored = db.prepare('SELECT created_at FROM memories WHERE id = ?').get(rowId) as any;
+  const createdAt = stored ? Number(stored.created_at) : now;
 
   return {
-    id: Number(result.lastInsertRowid),
+    id: rowId,
     project_id: projectId,
     type,
     content,
     source_ref: sourceRef ?? null,
     source_event_id: sourceEventId ?? null,
+    session_id: sessionId ?? null,
     embedding: embeddingVector ? (embeddingVector instanceof Float32Array ? embeddingVector : new Float32Array(embeddingVector)) : null,
     importance,
-    created_at: now
+    created_at: createdAt
   };
 }
 
@@ -70,14 +81,13 @@ export function deleteMemory(projectId: string, memoryId: number): boolean {
 export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
   const db = getDb();
   
-  // Use conditional query to avoid relying on SQLite's undocumented LIMIT -1 behavior
   const query = limit !== undefined
-    ? `SELECT id, project_id, type, content, source_ref, source_event_id, embedding, importance, created_at
+    ? `SELECT id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at
        FROM memories
        WHERE project_id = ?
        ORDER BY id DESC
        LIMIT ${limit}`
-    : `SELECT id, project_id, type, content, source_ref, source_event_id, embedding, importance, created_at
+    : `SELECT id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at
        FROM memories
        WHERE project_id = ?
        ORDER BY id DESC`;
@@ -91,6 +101,7 @@ export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
     content: r.content,
     source_ref: r.source_ref ?? null,
     source_event_id: r.source_event_id ? Number(r.source_event_id) : null,
+    session_id: r.session_id ?? null,
     embedding: r.embedding ? bufferToVector(r.embedding) : null,
     importance: Number(r.importance),
     created_at: Number(r.created_at)

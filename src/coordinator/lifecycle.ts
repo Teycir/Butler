@@ -226,20 +226,26 @@ export function generateStructuredHandoff(
 
     switch (event.type) {
       case 'TODO_COMPLETED':
-        completedTodos.push(`TODO ID ${payload.todo_id}`);
-        completedTodoIds.add(Number(payload.todo_id));
+        if (payload.todo_id != null) {
+          completedTodos.push(`TODO ID ${payload.todo_id}`);
+          completedTodoIds.add(Number(payload.todo_id));
+        }
         break;
       case 'TODO_CREATED':
-        createdTodoIds.add(Number(payload.todo_id));
+        if (payload.todo_id != null) {
+          createdTodoIds.add(Number(payload.todo_id));
+        }
         break;
       case 'TODO_UPDATED':
-        if (payload.status === 'completed') {
+        if (payload.todo_id != null && payload.status === 'completed') {
           completedTodos.push(`TODO ID ${payload.todo_id}`);
           completedTodoIds.add(Number(payload.todo_id));
         }
         break;
       case 'TODO_DELETED':
-        deletedTodoIds.add(Number(payload.todo_id));
+        if (payload.todo_id != null) {
+          deletedTodoIds.add(Number(payload.todo_id));
+        }
         break;
       case 'RULE_ADDED':
         rulesAdded.push(payload.content);
@@ -311,10 +317,11 @@ export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
     }
 
     // 2. Sessions transitioning to DEAD (age > 300s)
+    // Also catches 'alive' sessions that skipped the stale window (e.g. process pause / delayed tick)
     const deadRows = db.prepare(`
       SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
       FROM sessions
-      WHERE status = 'stale' AND (? - last_heartbeat) > ?
+      WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > ?
     `).all(now, SESSION_DEAD_THRESHOLD_SECS) as any[];
 
     const deadTransition = db.transaction(() => {
