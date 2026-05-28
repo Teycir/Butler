@@ -273,7 +273,8 @@ function renderContextMarkdown(
   } else {
     for (const t of pending) {
       const priorityEmoji = t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '🟢';
-      md += `- [ ] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version})\n`;
+      const claimNote = t.claimed_by ? ` 🔒 claimed by \`${t.claimed_by}\`` : '';
+      md += `- [ ] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version}${claimNote})\n`;
     }
   }
   if (completed.length > 0) {
@@ -326,6 +327,36 @@ function renderContextMarkdown(
       const recencyDays = Math.floor((Date.now() / 1000 - r.memory.created_at) / 86400);
       const recencyStr = recencyDays === 0 ? 'today' : recencyDays === 1 ? '1 day ago' : `${recencyDays} days ago`;
       md += `- **[${typeLabel}]** ${sanitizeMarkdown(r.memory.content)} _(importance: ${r.memory.importance.toFixed(1)}, ${recencyStr})_\n`;
+    }
+    md += `\n`;
+  }
+
+  // Phase 3.1 — conflicts
+  if (state.conflicts && state.conflicts.length > 0) {
+    md += `\n## ⚡ Recent Coordination Conflicts\n`;
+    md += `_These TODOs had concurrent writes from multiple sessions recently._\n\n`;
+    for (const c of state.conflicts.slice(-5)) {
+      md += `- **TODO ID ${c.todo_id}** — ${c.conflict_type.replace('_', ' ')} detected between sessions \`${c.detected_by_session}\` and \`${c.conflicting_session_id}\` (${new Date(c.detected_at * 1000).toISOString()})\n`;
+    }
+    md += `\n`;
+  }
+
+  // Phase 3.3 — messages addressed to a given session (shown to all for now; agents filter by session_id)
+  const recentMessages = state.messages ? state.messages.slice(-10) : [];
+  if (recentMessages.length > 0) {
+    md += `\n## 📬 Direct Messages\n`;
+    for (const m of recentMessages) {
+      md += `- **To \`${m.to_session_id}\`** from \`${m.from_session_id}\` (${new Date(m.sent_at * 1000).toISOString()}): ${sanitizeMarkdown(m.content)}\n`;
+    }
+    md += `\n`;
+  }
+
+  // Phase 3.4 — broadcasts
+  const recentBroadcasts = state.broadcasts ? state.broadcasts.slice(-5) : [];
+  if (recentBroadcasts.length > 0) {
+    md += `\n## 📢 Broadcasts\n`;
+    for (const b of recentBroadcasts) {
+      md += `- **\`${b.from_session_id}\`** (${new Date(b.sent_at * 1000).toISOString()}): ${sanitizeMarkdown(b.content)}\n`;
     }
     md += `\n`;
   }

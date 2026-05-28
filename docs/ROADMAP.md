@@ -134,35 +134,6 @@ Reduces the operational risk of schema changes across Butler versions.
 
 ---
 
-## Phase 5 — Ecosystem Expansion
-**Goal: Butler is a standard piece of the AI agent infrastructure stack.**
-
-### 5.1 — npm Package
-Publish Butler as `@butler-mcp/server` on npm so it can be installed without cloning:
-```bash
-npx @butler-mcp/server
-```
-Makes the MCP config a one-liner and removes the manual build step entirely.
-
-### 5.2 — Dense Embedding Support
-The current memory search uses TF-IDF (zero-config, local). Add an optional path
-for dense embeddings via a local model (e.g. `nomic-embed-text` via Ollama) or an
-API key (OpenAI, Voyage). Falls back to TF-IDF if neither is configured.
-Keeps zero-config as the default; opt-in for better recall.
-
-### 5.3 — Multi-Repo / Monorepo Support
-Allow a single Butler instance to serve multiple projects, each anchored to a
-different directory via `.butler/project.json`. The MCP server auto-routes tool
-calls to the correct project based on the calling agent's working directory.
-
-### 5.4 — Optional Cloud Sync (Self-Hosted)
-For teams where multiple developers each have their own local Butler instances,
-provide an optional sync layer (self-hosted, S3-compatible blob or a simple HTTP
-endpoint) that replicates event logs across machines. Local-first remains the default;
-sync is explicitly opt-in and the threat model is documented clearly.
-
----
-
 ## Deferred / Explicitly Out of Scope
 
 | Item | Reason deferred |
@@ -182,4 +153,3 @@ sync is explicitly opt-in and the threat model is documented clearly.
 | **2** | Handoff quality | Context agents receive is actually actionable |
 | **3** | Multi-agent coordination | Concurrent agents collaborate, not just coexist |
 | **4** | Developer experience | Operators can observe and trust Butler |
-| **5** | Ecosystem | Butler becomes standard AI agent infrastructure |

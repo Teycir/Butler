@@ -9,12 +9,18 @@ export type EventType =
   | 'TODO_UPDATED'
   | 'TODO_COMPLETED'
   | 'TODO_DELETED'
+  | 'TODO_CLAIMED'
+  | 'TODO_UNCLAIMED'
+  | 'TODO_CONFLICT'
   // Knowledge Events
   | 'WIKI_UPDATED'
   | 'RULE_ADDED'
   | 'RULE_REMOVED'
   | 'DECISION_RECORDED'
   | 'HANDOFF_CREATED'
+  // Coordination Events (Phase 3)
+  | 'MESSAGE_SENT'
+  | 'BROADCAST'
   // Memory Events
   | 'SUMMARY_CREATED'
   | 'MEMORY_EXTRACTED'
@@ -91,11 +97,16 @@ export interface EventPayloadMap {
   'TODO_UPDATED': { todo_id: number; title?: string; priority?: 'low' | 'medium' | 'high'; status?: 'pending' | 'completed' };
   'TODO_COMPLETED': { todo_id: number; version: number };
   'TODO_DELETED': { todo_id: number };
+  'TODO_CLAIMED': { todo_id: number; session_id: string; claimed_at: number };
+  'TODO_UNCLAIMED': { todo_id: number; session_id: string };
+  'TODO_CONFLICT': { todo_id: number; conflicting_session_id: string; conflict_type: 'concurrent_complete' | 'concurrent_update' };
   'WIKI_UPDATED': { topic: string; content: string };
   'RULE_ADDED': { rule_id: string; content: string };
   'RULE_REMOVED': { rule_id: string };
   'DECISION_RECORDED': { decision_id: string; title: string; context: string; decision: string };
   'HANDOFF_CREATED': HandoffPayload;
+  'MESSAGE_SENT': { from_session_id: string; to_session_id: string; content: string; sent_at: number };
+  'BROADCAST': { from_session_id: string; content: string; sent_at: number };
   'SUMMARY_CREATED': any;
   'MEMORY_EXTRACTED': any;
   'MEMORY_DELETED': { memory_id: number };

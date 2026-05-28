@@ -11,6 +11,7 @@ import { appendEvent, getNextSequenceValue } from '../../events/store.js';
 import { getDb } from '../../db/database.js';
 import { validateSession, updateLastEventSeen } from '../../coordinator/lifecycle.js';
 import { sanitizeTitle } from '../../validation.js';
+import { detectAndRecordConflict } from './coordination.tools.js';
 
 export const todoToolDefs = [
   {
@@ -128,6 +129,9 @@ export async function handleTodoTool(
           `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}. Fetch and retry.`
         );
 
+        // Phase 3.1 — detect concurrent writes from other sessions
+        detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_complete');
+
         const ev = appendEvent(projectId, String(args.session_id), 'TODO_COMPLETED', { todo_id: todoId, version: reqVersion });
         updateLastEventSeen(String(args.session_id), ev.id);
         return ev;
@@ -151,6 +155,9 @@ export async function handleTodoTool(
           ErrorCode.InvalidParams,
           `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}. Fetch and retry.`
         );
+
+        // Phase 3.1 — detect concurrent writes from other sessions
+        detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_update');
 
         const ev = appendEvent(projectId, String(args.session_id), 'TODO_UPDATED', {
           todo_id: todoId,

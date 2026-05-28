@@ -40,15 +40,17 @@ import { sessionToolDefs, handleSessionTool } from './tools/session.tools.js';
 import { todoToolDefs, handleTodoTool } from './tools/todo.tools.js';
 import { knowledgeToolDefs, handleKnowledgeTool } from './tools/knowledge.tools.js';
 import { memoryToolDefs, handleMemoryTool, handleProjectList } from './tools/memory.tools.js';
+import { coordinationToolDefs, handleCoordinationTool } from './tools/coordination.tools.js';
 
 // ---------------------------------------------------------------------------
 // Tool routing helpers
 // ---------------------------------------------------------------------------
 
-const SESSION_TOOLS   = new Set(sessionToolDefs.map(t => t.name));
-const TODO_TOOLS      = new Set(todoToolDefs.map(t => t.name));
-const KNOWLEDGE_TOOLS = new Set(knowledgeToolDefs.map(t => t.name));
-const MEMORY_TOOLS    = new Set(memoryToolDefs.map(t => t.name));
+const SESSION_TOOLS      = new Set(sessionToolDefs.map(t => t.name));
+const TODO_TOOLS         = new Set(todoToolDefs.map(t => t.name));
+const KNOWLEDGE_TOOLS    = new Set(knowledgeToolDefs.map(t => t.name));
+const MEMORY_TOOLS       = new Set(memoryToolDefs.map(t => t.name));
+const COORDINATION_TOOLS = new Set(coordinationToolDefs.map(t => t.name));
 
 /** Tools that manage session lifecycle and must not trigger auto-registration. */
 const SESSION_LIFECYCLE_TOOLS = new Set(['sessionregister', 'sessionheartbeat', 'sessiondisconnect']);
@@ -177,7 +179,8 @@ export class ButlerMcpServer {
         ...sessionToolDefs,
         ...todoToolDefs,
         ...knowledgeToolDefs,
-        ...memoryToolDefs
+        ...memoryToolDefs,
+        ...coordinationToolDefs
       ]
     }));
 
@@ -247,10 +250,11 @@ export class ButlerMcpServer {
   }
 
   private async dispatchTool(name: string, args: Record<string, any>, projectId: string) {
-    if (SESSION_TOOLS.has(name))   return handleSessionTool(name, args, projectId);
-    if (TODO_TOOLS.has(name))      return handleTodoTool(name, args, projectId);
-    if (KNOWLEDGE_TOOLS.has(name)) return handleKnowledgeTool(name, args, projectId);
-    if (MEMORY_TOOLS.has(name))    return handleMemoryTool(name, args, projectId);
+    if (SESSION_TOOLS.has(name))      return handleSessionTool(name, args, projectId);
+    if (TODO_TOOLS.has(name))         return handleTodoTool(name, args, projectId);
+    if (KNOWLEDGE_TOOLS.has(name))    return handleKnowledgeTool(name, args, projectId);
+    if (MEMORY_TOOLS.has(name))       return handleMemoryTool(name, args, projectId);
+    if (COORDINATION_TOOLS.has(name)) return handleCoordinationTool(name, args, projectId);
     throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${name}`);
   }
 

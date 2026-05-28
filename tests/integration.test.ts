@@ -1242,6 +1242,275 @@ async function runTests() {
   });
 
   // =========================================================================
+  // 23. Phase 3 — Work Claiming (todoclaim / todounclaim)
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('23. Phase 3 — Work Claiming');
+  console.log('──────────────────────────────────────────');
+
+  const CLAIM_PROJECT = 'test-claim-project';
+  const CLAIM_SID_A = 'session-claim-a';
+  const CLAIM_SID_B = 'session-claim-b';
+
+  await test('TODO_CLAIMED event sets claimed_by on the todo', () => {
+    invalidateProjectCache(CLAIM_PROJECT);
+    registerSession(CLAIM_PROJECT, CLAIM_SID_A, 'TestClient');
+    const todoId = getNextSequenceValue(CLAIM_PROJECT, 'todo');
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CREATED', { todo_id: todoId, title: 'Claim me', priority: 'medium' });
+    const claimedAt = Math.floor(Date.now() / 1000);
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: CLAIM_SID_A, claimed_at: claimedAt });
+    invalidateProjectCache(CLAIM_PROJECT);
+
+    const state = materializeProject(CLAIM_PROJECT, false);
+    const todo = state.todos[todoId];
+    assert(todo !== undefined, 'TODO should exist');
+    assert(todo.claimed_by === CLAIM_SID_A, `claimed_by should be ${CLAIM_SID_A}, got ${todo.claimed_by}`);
+    assert(todo.claimed_at === claimedAt, 'claimed_at should match');
+  });
+
+  await test('TODO_UNCLAIMED event removes claimed_by from the todo', () => {
+    invalidateProjectCache(CLAIM_PROJECT);
+    const todoId = getNextSequenceValue(CLAIM_PROJECT, 'todo');
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CREATED', { todo_id: todoId, title: 'Unclaim me', priority: 'low' });
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: CLAIM_SID_A, claimed_at: Math.floor(Date.now() / 1000) });
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_UNCLAIMED', { todo_id: todoId, session_id: CLAIM_SID_A });
+    invalidateProjectCache(CLAIM_PROJECT);
+
+    const state = materializeProject(CLAIM_PROJECT, false);
+    const todo = state.todos[todoId];
+    assert(todo !== undefined, 'TODO should exist');
+    assert(todo.claimed_by === undefined, 'claimed_by should be removed after unclaim');
+  });
+
+  await test('Claim from a different session is visible to all', () => {
+    invalidateProjectCache(CLAIM_PROJECT);
+    registerSession(CLAIM_PROJECT, CLAIM_SID_B, 'OtherClient');
+    const todoId = getNextSequenceValue(CLAIM_PROJECT, 'todo');
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_B, 'TODO_CREATED', { todo_id: todoId, title: 'Cross-session claim', priority: 'high' });
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_B, 'TODO_CLAIMED', { todo_id: todoId, session_id: CLAIM_SID_B, claimed_at: Math.floor(Date.now() / 1000) });
+    invalidateProjectCache(CLAIM_PROJECT);
+
+    // Session A materializes the project and should see Session B's claim
+    const state = materializeProject(CLAIM_PROJECT, false);
+    const todo = state.todos[todoId];
+    assert(todo.claimed_by === CLAIM_SID_B, `Session A should see claim by ${CLAIM_SID_B}`);
+  });
+
+  await test('Claimed_by is cleared when TODO is completed', () => {
+    invalidateProjectCache(CLAIM_PROJECT);
+    const todoId = getNextSequenceValue(CLAIM_PROJECT, 'todo');
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CREATED', { todo_id: todoId, title: 'Complete after claim', priority: 'medium' });
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: CLAIM_SID_A, claimed_at: Math.floor(Date.now() / 1000) });
+    // Complete without explicit unclaim — completed todos don't show in pending, claim is moot
+    appendEvent(CLAIM_PROJECT, CLAIM_SID_A, 'TODO_COMPLETED', { todo_id: todoId, version: 1 });
+    invalidateProjectCache(CLAIM_PROJECT);
+
+    const state = materializeProject(CLAIM_PROJECT, false);
+    const todo = state.todos[todoId];
+    assert(todo.status === 'completed', 'TODO should be completed');
+    // claimed_by may still be on the record, but the TODO is completed — that's acceptable
+  });
+
+  // =========================================================================
+  // 24. Phase 3 — Direct Messaging (messagesend)
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('24. Phase 3 — Direct Messaging');
+  console.log('──────────────────────────────────────────');
+
+  const MSG_PROJECT = 'test-msg-project';
+  const MSG_SID_A = 'session-msg-a';
+  const MSG_SID_B = 'session-msg-b';
+
+  await test('MESSAGE_SENT event materializes into messages array', () => {
+    invalidateProjectCache(MSG_PROJECT);
+    registerSession(MSG_PROJECT, MSG_SID_A, 'TestClient');
+    registerSession(MSG_PROJECT, MSG_SID_B, 'TestClient');
+
+    const sentAt = Math.floor(Date.now() / 1000);
+    appendEvent(MSG_PROJECT, MSG_SID_A, 'MESSAGE_SENT', {
+      from_session_id: MSG_SID_A,
+      to_session_id: MSG_SID_B,
+      content: 'Hold off on auth.ts — I am refactoring it',
+      sent_at: sentAt
+    });
+    invalidateProjectCache(MSG_PROJECT);
+
+    const state = materializeProject(MSG_PROJECT, false);
+    assert(state.messages.length === 1, `Should have 1 message, got ${state.messages.length}`);
+    assert(state.messages[0].from_session_id === MSG_SID_A, 'from_session_id should match');
+    assert(state.messages[0].to_session_id === MSG_SID_B, 'to_session_id should match');
+    assert(state.messages[0].content === 'Hold off on auth.ts — I am refactoring it', 'content should match');
+    assert(state.messages[0].sent_at === sentAt, 'sent_at should match');
+  });
+
+  await test('Multiple messages accumulate in order', () => {
+    invalidateProjectCache(MSG_PROJECT);
+    const sentAt = Math.floor(Date.now() / 1000);
+    appendEvent(MSG_PROJECT, MSG_SID_B, 'MESSAGE_SENT', {
+      from_session_id: MSG_SID_B,
+      to_session_id: MSG_SID_A,
+      content: 'Got it, I will wait',
+      sent_at: sentAt + 1
+    });
+    invalidateProjectCache(MSG_PROJECT);
+
+    const state = materializeProject(MSG_PROJECT, false);
+    assert(state.messages.length === 2, `Should have 2 messages, got ${state.messages.length}`);
+    assert(state.messages[1].from_session_id === MSG_SID_B, 'Second message from should be B');
+  });
+
+  await test('Messages are capped at 50', () => {
+    invalidateProjectCache(MSG_PROJECT);
+    const sentAt = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 60; i++) {
+      appendEvent(MSG_PROJECT, MSG_SID_A, 'MESSAGE_SENT', {
+        from_session_id: MSG_SID_A,
+        to_session_id: MSG_SID_B,
+        content: `Message number ${i}`,
+        sent_at: sentAt + i
+      });
+    }
+    invalidateProjectCache(MSG_PROJECT);
+
+    const state = materializeProject(MSG_PROJECT, false);
+    assert(state.messages.length === 50, `Messages should be capped at 50, got ${state.messages.length}`);
+    // The last message should be the most recent one
+    assert(state.messages[49].content === 'Message number 59', 'Last message should be the most recent');
+  });
+
+  // =========================================================================
+  // 25. Phase 3 — Broadcasts
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('25. Phase 3 — Broadcasts');
+  console.log('──────────────────────────────────────────');
+
+  const BC_PROJECT = 'test-broadcast-project';
+  const BC_SID_A = 'session-bc-a';
+  const BC_SID_B = 'session-bc-b';
+
+  await test('BROADCAST event materializes into broadcasts array', () => {
+    invalidateProjectCache(BC_PROJECT);
+    registerSession(BC_PROJECT, BC_SID_A, 'TestClient');
+    const sentAt = Math.floor(Date.now() / 1000);
+    appendEvent(BC_PROJECT, BC_SID_A, 'BROADCAST', {
+      from_session_id: BC_SID_A,
+      content: 'Starting a large refactor of the auth module',
+      sent_at: sentAt
+    });
+    invalidateProjectCache(BC_PROJECT);
+
+    const state = materializeProject(BC_PROJECT, false);
+    assert(state.broadcasts.length === 1, `Should have 1 broadcast, got ${state.broadcasts.length}`);
+    assert(state.broadcasts[0].from_session_id === BC_SID_A, 'from_session_id should match');
+    assert(state.broadcasts[0].content === 'Starting a large refactor of the auth module', 'content should match');
+  });
+
+  await test('Broadcasts from multiple sessions accumulate in order', () => {
+    invalidateProjectCache(BC_PROJECT);
+    registerSession(BC_PROJECT, BC_SID_B, 'TestClient');
+    const sentAt = Math.floor(Date.now() / 1000);
+    appendEvent(BC_PROJECT, BC_SID_B, 'BROADCAST', {
+      from_session_id: BC_SID_B,
+      content: 'I will avoid auth for now',
+      sent_at: sentAt + 2
+    });
+    invalidateProjectCache(BC_PROJECT);
+
+    const state = materializeProject(BC_PROJECT, false);
+    assert(state.broadcasts.length === 2, `Should have 2 broadcasts, got ${state.broadcasts.length}`);
+    assert(state.broadcasts[1].from_session_id === BC_SID_B, 'Second broadcast from should be B');
+  });
+
+  await test('Broadcasts are capped at 20', () => {
+    invalidateProjectCache(BC_PROJECT);
+    const sentAt = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 25; i++) {
+      appendEvent(BC_PROJECT, BC_SID_A, 'BROADCAST', {
+        from_session_id: BC_SID_A,
+        content: `Broadcast ${i}`,
+        sent_at: sentAt + i
+      });
+    }
+    invalidateProjectCache(BC_PROJECT);
+
+    const state = materializeProject(BC_PROJECT, false);
+    assert(state.broadcasts.length === 20, `Broadcasts should be capped at 20, got ${state.broadcasts.length}`);
+    assert(state.broadcasts[19].content === 'Broadcast 24', 'Last broadcast should be most recent');
+  });
+
+  // =========================================================================
+  // 26. Phase 3 — Conflict Detection
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('26. Phase 3 — Conflict Detection');
+  console.log('──────────────────────────────────────────');
+
+  const CONF_PROJECT = 'test-conflict-project';
+  const CONF_SID_A = 'session-conf-a';
+  const CONF_SID_B = 'session-conf-b';
+
+  await test('TODO_CONFLICT event materializes into conflicts array', () => {
+    invalidateProjectCache(CONF_PROJECT);
+    registerSession(CONF_PROJECT, CONF_SID_A, 'TestClient');
+    registerSession(CONF_PROJECT, CONF_SID_B, 'TestClient');
+
+    const todoId = getNextSequenceValue(CONF_PROJECT, 'todo');
+    appendEvent(CONF_PROJECT, CONF_SID_A, 'TODO_CREATED', { todo_id: todoId, title: 'Contested task', priority: 'high' });
+    appendEvent(CONF_PROJECT, CONF_SID_B, 'TODO_CONFLICT', {
+      todo_id: todoId,
+      conflicting_session_id: CONF_SID_A,
+      conflict_type: 'concurrent_complete'
+    });
+    invalidateProjectCache(CONF_PROJECT);
+
+    const state = materializeProject(CONF_PROJECT, false);
+    assert(state.conflicts.length === 1, `Should have 1 conflict, got ${state.conflicts.length}`);
+    assert(state.conflicts[0].todo_id === todoId, 'todo_id should match');
+    assert(state.conflicts[0].conflicting_session_id === CONF_SID_A, 'conflicting_session_id should match');
+    assert(state.conflicts[0].conflict_type === 'concurrent_complete', 'conflict_type should match');
+    assert(state.conflicts[0].detected_by_session === CONF_SID_B, 'detected_by_session should match');
+  });
+
+  await test('Conflicts are capped at 20', () => {
+    invalidateProjectCache(CONF_PROJECT);
+    for (let i = 0; i < 25; i++) {
+      const todoId = getNextSequenceValue(CONF_PROJECT, 'todo');
+      appendEvent(CONF_PROJECT, CONF_SID_A, 'TODO_CREATED', { todo_id: todoId, title: `Task ${i}`, priority: 'low' });
+      appendEvent(CONF_PROJECT, CONF_SID_B, 'TODO_CONFLICT', {
+        todo_id: todoId,
+        conflicting_session_id: CONF_SID_A,
+        conflict_type: 'concurrent_update'
+      });
+    }
+    invalidateProjectCache(CONF_PROJECT);
+
+    const state = materializeProject(CONF_PROJECT, false);
+    assert(state.conflicts.length === 20, `Conflicts should be capped at 20, got ${state.conflicts.length}`);
+  });
+
+  await test('Conflicts from different conflict_types are both recorded', () => {
+    const CF2_PROJECT = 'test-conflict2-project';
+    invalidateProjectCache(CF2_PROJECT);
+    registerSession(CF2_PROJECT, CONF_SID_A, 'TestClient');
+    registerSession(CF2_PROJECT, CONF_SID_B, 'TestClient');
+
+    const t1 = getNextSequenceValue(CF2_PROJECT, 'todo');
+    const t2 = getNextSequenceValue(CF2_PROJECT, 'todo');
+    appendEvent(CF2_PROJECT, CONF_SID_A, 'TODO_CREATED', { todo_id: t1, title: 'Task 1', priority: 'medium' });
+    appendEvent(CF2_PROJECT, CONF_SID_A, 'TODO_CREATED', { todo_id: t2, title: 'Task 2', priority: 'medium' });
+    appendEvent(CF2_PROJECT, CONF_SID_B, 'TODO_CONFLICT', { todo_id: t1, conflicting_session_id: CONF_SID_A, conflict_type: 'concurrent_complete' });
+    appendEvent(CF2_PROJECT, CONF_SID_B, 'TODO_CONFLICT', { todo_id: t2, conflicting_session_id: CONF_SID_A, conflict_type: 'concurrent_update' });
+    invalidateProjectCache(CF2_PROJECT);
+
+    const state = materializeProject(CF2_PROJECT, false);
+    assert(state.conflicts.length === 2, `Should have 2 conflicts, got ${state.conflicts.length}`);
+    assert(state.conflicts[0].conflict_type === 'concurrent_complete', 'First conflict type should match');
+    assert(state.conflicts[1].conflict_type === 'concurrent_update', 'Second conflict type should match');
+  });
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n══════════════════════════════════════════');

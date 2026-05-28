@@ -11,6 +11,8 @@ export interface TodoItem {
   created_by: string; // session_id of creator
   updated_at: number;
   updated_by: string; // session_id of last updater
+  claimed_by?: string; // session_id currently holding the claim, if any
+  claimed_at?: number;
 }
 
 export interface WikiPage {
@@ -31,12 +33,38 @@ export interface DecisionItem {
   updated_by: string;
 }
 
+export interface ConflictRecord {
+  todo_id: number;
+  conflicting_session_id: string;
+  conflict_type: 'concurrent_complete' | 'concurrent_update';
+  detected_at: number;
+  detected_by_session: string;
+}
+
+export interface MessageRecord {
+  from_session_id: string;
+  to_session_id: string;
+  content: string;
+  sent_at: number;
+  event_id: number;
+}
+
+export interface BroadcastRecord {
+  from_session_id: string;
+  content: string;
+  sent_at: number;
+  event_id: number;
+}
+
 export interface ProjectState {
   todos: Record<number, TodoItem>;
   wiki: Record<string, WikiPage>;
   rules: Record<string, { id: string; content: string; version: number; created_by: string; updated_at: number }>;
   decisions: Record<string, DecisionItem>;
   handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: HandoffPayload; source?: 'agent' | 'system' }>;
+  conflicts: ConflictRecord[];       // Phase 3.1 — recent unresolved conflicts
+  messages: MessageRecord[];         // Phase 3.3 — recent direct messages
+  broadcasts: BroadcastRecord[];     // Phase 3.4 — recent broadcasts
   lastEventId: number;
 }
 
@@ -47,6 +75,9 @@ export function createInitialState(): ProjectState {
     rules: {},
     decisions: {},
     handoffs: [],
+    conflicts: [],
+    messages: [],
+    broadcasts: [],
     lastEventId: 0
   };
 }
@@ -65,6 +96,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     rules: { ...state.rules },
     decisions: { ...state.decisions },
     handoffs: [...state.handoffs],
+    conflicts: [...state.conflicts],
+    messages: [...state.messages],
+    broadcasts: [...state.broadcasts],
     lastEventId: event.id
   };
 
@@ -193,6 +227,73 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
         if (updatedState.handoffs.length > HANDOFF_HISTORY_LIMIT) {
           updatedState.handoffs = updatedState.handoffs.slice(-HANDOFF_HISTORY_LIMIT);
         }
+      }
+      break;
+    }
+
+    case 'TODO_CLAIMED': {
+      const todoId = Number(payload.todo_id);
+      const existing = updatedState.todos[todoId];
+      if (existing) {
+        updatedState.todos[todoId] = {
+          ...existing,
+          claimed_by: payload.session_id,
+          claimed_at: payload.claimed_at
+        };
+      }
+      break;
+    }
+
+    case 'TODO_UNCLAIMED': {
+      const todoId = Number(payload.todo_id);
+      const existing = updatedState.todos[todoId];
+      if (existing) {
+        const { claimed_by, claimed_at, ...rest } = existing;
+        updatedState.todos[todoId] = rest;
+      }
+      break;
+    }
+
+    case 'TODO_CONFLICT': {
+      const CONFLICT_HISTORY_LIMIT = 20;
+      updatedState.conflicts.push({
+        todo_id: Number(payload.todo_id),
+        conflicting_session_id: payload.conflicting_session_id,
+        conflict_type: payload.conflict_type,
+        detected_at: event.created_at,
+        detected_by_session: event.session_id
+      });
+      if (updatedState.conflicts.length > CONFLICT_HISTORY_LIMIT) {
+        updatedState.conflicts = updatedState.conflicts.slice(-CONFLICT_HISTORY_LIMIT);
+      }
+      break;
+    }
+
+    case 'MESSAGE_SENT': {
+      const MESSAGE_HISTORY_LIMIT = 50;
+      updatedState.messages.push({
+        from_session_id: payload.from_session_id,
+        to_session_id: payload.to_session_id,
+        content: payload.content,
+        sent_at: payload.sent_at,
+        event_id: event.id
+      });
+      if (updatedState.messages.length > MESSAGE_HISTORY_LIMIT) {
+        updatedState.messages = updatedState.messages.slice(-MESSAGE_HISTORY_LIMIT);
+      }
+      break;
+    }
+
+    case 'BROADCAST': {
+      const BROADCAST_HISTORY_LIMIT = 20;
+      updatedState.broadcasts.push({
+        from_session_id: payload.from_session_id,
+        content: payload.content,
+        sent_at: payload.sent_at,
+        event_id: event.id
+      });
+      if (updatedState.broadcasts.length > BROADCAST_HISTORY_LIMIT) {
+        updatedState.broadcasts = updatedState.broadcasts.slice(-BROADCAST_HISTORY_LIMIT);
       }
       break;
     }
