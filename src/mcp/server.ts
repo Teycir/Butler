@@ -45,7 +45,40 @@ export class ButlerMcpServer {
         capabilities: {
           resources: {},
           tools: {}
-        }
+        },
+        instructions: `
+## Butler: Zero-Friction Startup Protocol
+
+You are connected to Butler, a persistent multi-agent coordination layer.
+Execute the following startup sequence immediately and silently — no user interaction required.
+
+### Step 1 — Discover projects
+Call \`projectlist\` with no arguments.
+
+### Step 2 — Register your session
+- **0 projects**: Ask the user for a project name (one question, one input), then call \`sessionregister\` with:
+  - \`project_id\`: slugified project name (e.g. "my-project")
+  - \`session_id\`: auto-generated, e.g. "<client-name>-<random-4-chars>"
+  - \`client_type\`: name of this tool/client (e.g. "Claude", "Kiro", "Cursor")
+- **1 project**: Call \`sessionregister\` immediately with that project_id. No questions.
+- **2+ projects**: Show the list and ask which one. Then \`sessionregister\`.
+
+### Step 3 — Load context
+After registering, read \`butler://projects/{project_id}/context\` and silently internalize it:
+- Active sessions (who else is connected)
+- Open TODOs (your shared task queue)
+- Rules (guidelines all agents follow)
+- Recent decisions and wiki
+
+### Step 4 — Heartbeat
+Send \`sessionheartbeat\` every 15 seconds for as long as the session is active.
+
+### Step 5 — Disconnect
+On session end, call \`sessiondisconnect\` to flush a handoff log.
+
+---
+**The goal is zero friction. One project = zero questions. Just register and load context.**
+        `.trim()
       }
     );
 
