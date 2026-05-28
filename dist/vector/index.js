@@ -1,19 +1,24 @@
 import { getDb } from '../db/database.js';
 import { MEMORY_SEARCH_LIMIT, now as getCurrentTimestamp } from '../constants.js';
 import { bufferToVector, vectorToBuffer, searchSparse, cosineSimilarity } from './similarity.js';
-export function addMemory(projectId, type, content, embeddingVector, importance = 0.5) {
+export function addMemory(projectId, type, content, embeddingVector, importance = 0.5, sourceRef, sourceEventId) {
     const db = getDb();
     const now = getCurrentTimestamp();
     const embeddingBlob = embeddingVector ? vectorToBuffer(embeddingVector) : null;
     const result = db.prepare(`
-    INSERT INTO memories (project_id, type, content, embedding, importance, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(projectId, type, content, embeddingBlob, importance, now);
+    INSERT INTO memories (project_id, type, content, source_ref, source_event_id, embedding, importance, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, type, source_ref) WHERE source_ref IS NOT NULL
+    DO UPDATE SET content = excluded.content, source_event_id = excluded.source_event_id,
+                  embedding = excluded.embedding, importance = excluded.importance
+  `).run(projectId, type, content, sourceRef ?? null, sourceEventId ?? null, embeddingBlob, importance, now);
     return {
         id: Number(result.lastInsertRowid),
         project_id: projectId,
         type,
         content,
+        source_ref: sourceRef ?? null,
+        source_event_id: sourceEventId ?? null,
         embedding: embeddingVector ? (embeddingVector instanceof Float32Array ? embeddingVector : new Float32Array(embeddingVector)) : null,
         importance,
         created_at: now
@@ -32,12 +37,12 @@ export function getMemories(projectId, limit) {
     const db = getDb();
     // Use conditional query to avoid relying on SQLite's undocumented LIMIT -1 behavior
     const query = limit !== undefined
-        ? `SELECT id, project_id, type, content, embedding, importance, created_at
+        ? `SELECT id, project_id, type, content, source_ref, source_event_id, embedding, importance, created_at
        FROM memories
        WHERE project_id = ?
        ORDER BY id DESC
        LIMIT ${limit}`
-        : `SELECT id, project_id, type, content, embedding, importance, created_at
+        : `SELECT id, project_id, type, content, source_ref, source_event_id, embedding, importance, created_at
        FROM memories
        WHERE project_id = ?
        ORDER BY id DESC`;
@@ -47,6 +52,8 @@ export function getMemories(projectId, limit) {
         project_id: r.project_id,
         type: r.type,
         content: r.content,
+        source_ref: r.source_ref ?? null,
+        source_event_id: r.source_event_id ? Number(r.source_event_id) : null,
         embedding: r.embedding ? bufferToVector(r.embedding) : null,
         importance: Number(r.importance),
         created_at: Number(r.created_at)

@@ -1,4 +1,4 @@
-import { getDb } from '../db/database.js';
+import { getDb, sha256hex } from '../db/database.js';
 import { EventPayloadMap, EventRecord, EventType } from './types.js';
 import { now as getCurrentTimestamp } from '../constants.js';
 
@@ -104,12 +104,13 @@ export function createSnapshot(projectId: string, eventId: number, state: Record
   const db = getDb();
   const now = getCurrentTimestamp();
   const stateStr = JSON.stringify(state);
+  const checksum = sha256hex(stateStr);
 
   db.prepare(`
-    INSERT INTO snapshots (project_id, event_id, snapshot_json, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(projectId, eventId, stateStr, now);
-  
+    INSERT INTO snapshots (project_id, event_id, snapshot_json, sha256_hex, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(projectId, eventId, stateStr, checksum, now);
+
   // Keep last 3 snapshots for recovery fallback
   db.prepare(`
     DELETE FROM snapshots 
@@ -132,21 +133,35 @@ export interface SnapshotRecord {
 
 export function getLatestSnapshot(projectId: string): SnapshotRecord | null {
   const db = getDb();
-  const row = db.prepare(`
-    SELECT id, project_id, event_id, snapshot_json, created_at
+
+  // Try snapshots newest-first; skip any that fail integrity check
+  const rows = db.prepare(`
+    SELECT id, project_id, event_id, snapshot_json, sha256_hex, created_at
     FROM snapshots
     WHERE project_id = ?
     ORDER BY event_id DESC
-    LIMIT 1
-  `).get(projectId) as any;
+    LIMIT 3
+  `).all(projectId) as any[];
 
-  if (!row) return null;
+  for (const row of rows) {
+    // Legacy snapshots (sha256_hex = '') are accepted without validation
+    if (row.sha256_hex && row.sha256_hex !== '') {
+      const expected = sha256hex(row.snapshot_json);
+      if (expected !== row.sha256_hex) {
+        console.error(
+          `Snapshot integrity failure for project ${projectId} at event_id ${row.event_id} — skipping and replaying from prior snapshot`
+        );
+        continue;
+      }
+    }
+    return {
+      id: Number(row.id),
+      project_id: row.project_id,
+      event_id: Number(row.event_id),
+      snapshot_json: row.snapshot_json,
+      created_at: Number(row.created_at)
+    };
+  }
 
-  return {
-    id: Number(row.id),
-    project_id: row.project_id,
-    event_id: Number(row.event_id),
-    snapshot_json: row.snapshot_json,
-    created_at: Number(row.created_at)
-  };
+  return null;
 }

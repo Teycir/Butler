@@ -15,6 +15,7 @@ export interface SessionRecord {
   project_id: string;
   client_type: string;
   status: 'alive' | 'stale' | 'dead';
+  created_at: number;
   last_heartbeat: number;
   last_event_seen: number;
 }
@@ -32,7 +33,7 @@ export function registerSession(projectId: string, sessionId: string, clientType
 
     // Check if session exists
     const existing = db.prepare(`
-      SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen 
+      SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen 
       FROM sessions 
       WHERE id = ?
     `).get(sessionId) as any;
@@ -76,7 +77,7 @@ export function registerSession(projectId: string, sessionId: string, clientType
 export function getSession(sessionId: string): SessionRecord | null {
   const db = getDb();
   const row = db.prepare(`
-    SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
+    SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions 
     WHERE id = ?
   `).get(sessionId) as any;
@@ -87,6 +88,7 @@ export function getSession(sessionId: string): SessionRecord | null {
     project_id: row.project_id,
     client_type: row.client_type,
     status: row.status as any,
+    created_at: Number(row.created_at),
     last_heartbeat: Number(row.last_heartbeat),
     last_event_seen: Number(row.last_event_seen)
   };
@@ -95,7 +97,7 @@ export function getSession(sessionId: string): SessionRecord | null {
 export function getActiveSessions(projectId: string): SessionRecord[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
+    SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions
     WHERE project_id = ? AND status IN ('alive', 'stale')
   `).all(projectId) as any[];
@@ -105,6 +107,7 @@ export function getActiveSessions(projectId: string): SessionRecord[] {
     project_id: row.project_id,
     client_type: row.client_type,
     status: row.status as any,
+    created_at: Number(row.created_at),
     last_heartbeat: Number(row.last_heartbeat),
     last_event_seen: Number(row.last_event_seen)
   }));

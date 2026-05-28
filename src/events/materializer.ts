@@ -8,13 +8,17 @@ export interface TodoItem {
   priority: 'low' | 'medium' | 'high';
   status: 'pending' | 'completed';
   version: number;
+  created_by: string; // session_id of creator
   updated_at: number;
+  updated_by: string; // session_id of last updater
 }
 
 export interface WikiPage {
   topic: string;
   content: string;
   version: number;
+  updated_at: number;
+  updated_by: string; // session_id of last writer
 }
 
 export interface DecisionItem {
@@ -23,12 +27,14 @@ export interface DecisionItem {
   context: string;
   decision: string;
   version: number;
+  updated_at: number;
+  updated_by: string;
 }
 
 export interface ProjectState {
   todos: Record<number, TodoItem>;
   wiki: Record<string, WikiPage>;
-  rules: Record<string, { id: string; content: string; version: number }>;
+  rules: Record<string, { id: string; content: string; version: number; created_by: string; updated_at: number }>;
   decisions: Record<string, DecisionItem>;
   handoffs: Array<{ session_id: string; summary: string; timestamp: number; payload: HandoffPayload; source?: 'agent' | 'system' }>;
   lastEventId: number;
@@ -79,7 +85,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
         priority: payload.priority || 'medium',
         status: 'pending',
         version: 1,
-        updated_at: event.created_at
+        created_by: event.session_id,
+        updated_at: event.created_at,
+        updated_by: event.session_id
       };
       break;
     }
@@ -94,7 +102,8 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
           priority: payload.priority !== undefined ? payload.priority : existing.priority,
           status: payload.status !== undefined ? payload.status : existing.status,
           version: existing.version + 1,
-          updated_at: event.created_at
+          updated_at: event.created_at,
+          updated_by: event.session_id
         };
       }
       break;
@@ -108,7 +117,8 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
           ...existing,
           status: 'completed',
           version: existing.version + 1,
-          updated_at: event.created_at
+          updated_at: event.created_at,
+          updated_by: event.session_id
         };
       }
       break;
@@ -126,7 +136,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
       updatedState.wiki[topic] = {
         topic,
         content: payload.content,
-        version: existing ? existing.version + 1 : 1
+        version: existing ? existing.version + 1 : 1,
+        updated_at: event.created_at,
+        updated_by: event.session_id
       };
       break;
     }
@@ -138,7 +150,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
       updatedState.rules[ruleId] = {
         id: ruleId,
         content: ruleContent,
-        version: existing ? existing.version + 1 : 1
+        version: existing ? existing.version + 1 : 1,
+        created_by: event.session_id,
+        updated_at: event.created_at
       };
       break;
     }
@@ -157,7 +171,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
         title: payload.title,
         context: payload.context,
         decision: payload.decision,
-        version: existing ? existing.version + 1 : 1
+        version: existing ? existing.version + 1 : 1,
+        updated_at: event.created_at,
+        updated_by: event.session_id
       };
       break;
     }

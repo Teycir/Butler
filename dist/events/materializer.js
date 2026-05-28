@@ -41,7 +41,9 @@ export function projectEvent(state, event) {
                 priority: payload.priority || 'medium',
                 status: 'pending',
                 version: 1,
-                updated_at: event.created_at
+                created_by: event.session_id,
+                updated_at: event.created_at,
+                updated_by: event.session_id
             };
             break;
         }
@@ -55,7 +57,8 @@ export function projectEvent(state, event) {
                     priority: payload.priority !== undefined ? payload.priority : existing.priority,
                     status: payload.status !== undefined ? payload.status : existing.status,
                     version: existing.version + 1,
-                    updated_at: event.created_at
+                    updated_at: event.created_at,
+                    updated_by: event.session_id
                 };
             }
             break;
@@ -68,7 +71,8 @@ export function projectEvent(state, event) {
                     ...existing,
                     status: 'completed',
                     version: existing.version + 1,
-                    updated_at: event.created_at
+                    updated_at: event.created_at,
+                    updated_by: event.session_id
                 };
             }
             break;
@@ -84,7 +88,9 @@ export function projectEvent(state, event) {
             updatedState.wiki[topic] = {
                 topic,
                 content: payload.content,
-                version: existing ? existing.version + 1 : 1
+                version: existing ? existing.version + 1 : 1,
+                updated_at: event.created_at,
+                updated_by: event.session_id
             };
             break;
         }
@@ -95,7 +101,9 @@ export function projectEvent(state, event) {
             updatedState.rules[ruleId] = {
                 id: ruleId,
                 content: ruleContent,
-                version: existing ? existing.version + 1 : 1
+                version: existing ? existing.version + 1 : 1,
+                created_by: event.session_id,
+                updated_at: event.created_at
             };
             break;
         }
@@ -112,7 +120,9 @@ export function projectEvent(state, event) {
                 title: payload.title,
                 context: payload.context,
                 decision: payload.decision,
-                version: existing ? existing.version + 1 : 1
+                version: existing ? existing.version + 1 : 1,
+                updated_at: event.created_at,
+                updated_by: event.session_id
             };
             break;
         }

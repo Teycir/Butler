@@ -14,7 +14,7 @@ export function registerSession(projectId, sessionId, clientType) {
         db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
         // Check if session exists
         const existing = db.prepare(`
-      SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen 
+      SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen 
       FROM sessions 
       WHERE id = ?
     `).get(sessionId);
@@ -53,7 +53,7 @@ export function registerSession(projectId, sessionId, clientType) {
 export function getSession(sessionId) {
     const db = getDb();
     const row = db.prepare(`
-    SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
+    SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions 
     WHERE id = ?
   `).get(sessionId);
@@ -64,6 +64,7 @@ export function getSession(sessionId) {
         project_id: row.project_id,
         client_type: row.client_type,
         status: row.status,
+        created_at: Number(row.created_at),
         last_heartbeat: Number(row.last_heartbeat),
         last_event_seen: Number(row.last_event_seen)
     };
@@ -71,7 +72,7 @@ export function getSession(sessionId) {
 export function getActiveSessions(projectId) {
     const db = getDb();
     const rows = db.prepare(`
-    SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
+    SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions
     WHERE project_id = ? AND status IN ('alive', 'stale')
   `).all(projectId);
@@ -80,6 +81,7 @@ export function getActiveSessions(projectId) {
         project_id: row.project_id,
         client_type: row.client_type,
         status: row.status,
+        created_at: Number(row.created_at),
         last_heartbeat: Number(row.last_heartbeat),
         last_event_seen: Number(row.last_event_seen)
     }));

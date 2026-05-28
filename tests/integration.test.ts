@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { initDatabase, closeDatabase } from '../src/db/database.js';
+import { initDatabase, closeDatabase, sha256hex } from '../src/db/database.js';
 import { appendEvent, getNextSequenceValue } from '../src/events/store.js';
 import { materializeProject, invalidateProjectCache } from '../src/events/materializer.js';
 import {
@@ -8,8 +8,13 @@ import {
   getSession,
   gracefulDisconnect,
   validateSession,
+  getActiveSessions,
+  generateStructuredHandoff,
+  startLifecycleMonitor,
+  stopLifecycleMonitor,
 } from '../src/coordinator/lifecycle.js';
 import { addMemory, deleteMemory, searchMemories, getMemories } from '../src/vector/index.js';
+import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle } from '../src/validation.js';
 import { getDb } from '../src/db/database.js';
 import fs from 'fs';
 import path from 'path';
@@ -78,6 +83,9 @@ async function runTests() {
     const sB = registerSession(PROJECT_ID, CLIENT_B, 'Cursor Editor');
     assert(sA.status === 'alive', `Expected alive, got ${sA.status}`);
     assert(sB.status === 'alive', `Expected alive, got ${sB.status}`);
+    // created_at must be a positive unix timestamp
+    assert(sA.created_at > 0, 'created_at should be a positive unix timestamp');
+    assert(sB.created_at > 0, 'created_at should be a positive unix timestamp');
   });
 
   await test('Heartbeat advances timestamp', async () => {
@@ -170,6 +178,10 @@ async function runTests() {
     assert(state.todos[TODO_B]?.title === 'Beta task',  'TODO_B missing');
     assert(state.todos[TODO_C]?.title === 'Gamma task', 'TODO_C missing');
     assert(state.todos[TODO_A]?.version === 1, `Expected version 1, got ${state.todos[TODO_A]?.version}`);
+    // Provenance: created_by and updated_by must be set to the writing session
+    assert(state.todos[TODO_A].created_by === CLIENT_A, `created_by should be ${CLIENT_A}`);
+    assert(state.todos[TODO_A].updated_by === CLIENT_A, `updated_by should be ${CLIENT_A}`);
+    assert(state.todos[TODO_A].updated_at > 0, 'updated_at should be a positive unix timestamp');
   });
 
   await test('Cache hit returns identical state without re-reading events', () => {
@@ -230,10 +242,13 @@ async function runTests() {
   await test('TODO update increments version correctly', () => {
     const before = materializeProject(PROJECT_ID, false);
     const v = before.todos[TODO_C].version;
-    appendEvent(PROJECT_ID, CLIENT_A, 'TODO_UPDATED', { todo_id: TODO_C, title: 'Gamma task (revised)', priority: 'high' });
+    appendEvent(PROJECT_ID, CLIENT_B, 'TODO_UPDATED', { todo_id: TODO_C, title: 'Gamma task (revised)', priority: 'high' });
     const after = materializeProject(PROJECT_ID, false);
     assert(after.todos[TODO_C].title === 'Gamma task (revised)', 'Title not updated');
     assert(after.todos[TODO_C].version === v + 1, `Expected version ${v + 1}`);
+    // updated_by must reflect the new writer (CLIENT_B), not the original creator (CLIENT_A)
+    assert(after.todos[TODO_C].updated_by === CLIENT_B, `updated_by should switch to ${CLIENT_B}`);
+    assert(after.todos[TODO_C].created_by === CLIENT_A, `created_by should still be ${CLIENT_A}`);
   });
 
   await test('TODO delete removes entry from materialized state', () => {
@@ -313,13 +328,16 @@ async function runTests() {
     const state = materializeProject(PROJECT_ID, false);
     assert(state.wiki['Setup'] !== undefined, 'Wiki page not found');
     assert(state.wiki['Setup'].version === 1, 'Expected version 1');
+    assert(state.wiki['Setup'].updated_by === CLIENT_A, `updated_by should be ${CLIENT_A}`);
+    assert(state.wiki['Setup'].updated_at > 0, 'updated_at should be a positive unix timestamp');
   });
 
-  await test('Wiki page update increments version', () => {
-    appendEvent(PROJECT_ID, CLIENT_A, 'WIKI_UPDATED', { topic: 'Setup', content: 'Updated setup guide.' });
+  await test('Wiki page update increments version and tracks new writer', () => {
+    appendEvent(PROJECT_ID, CLIENT_B, 'WIKI_UPDATED', { topic: 'Setup', content: 'Updated setup guide.' });
     const state = materializeProject(PROJECT_ID, false);
     assert(state.wiki['Setup'].content === 'Updated setup guide.', 'Content not updated');
     assert(state.wiki['Setup'].version === 2, `Expected version 2, got ${state.wiki['Setup'].version}`);
+    assert(state.wiki['Setup'].updated_by === CLIENT_B, `updated_by should switch to ${CLIENT_B}`);
   });
 
   await test('Decision is recorded and retrievable', () => {
@@ -332,6 +350,8 @@ async function runTests() {
     const state = materializeProject(PROJECT_ID, false);
     assert(state.decisions['ADR-001'] !== undefined, 'Decision not found');
     assert(state.decisions['ADR-001'].title === 'Use SQLite over Postgres', 'Title mismatch');
+    assert(state.decisions['ADR-001'].updated_by === CLIENT_A, `updated_by should be ${CLIENT_A}`);
+    assert(state.decisions['ADR-001'].updated_at > 0, 'updated_at should be a positive unix timestamp');
   });
 
   await test('Re-recording same decision ID increments version', () => {
@@ -543,6 +563,438 @@ async function runTests() {
     invalidateProjectCache(PROJECT_ID);
     const state = materializeProject(PROJECT_ID, false);
     assert(state.handoffs.length <= 50, `Expected ≤50 handoffs, got ${state.handoffs.length}`);
+  });
+
+  // =========================================================================
+  // 11. PROVENANCE — source_ref, source_event_id, upsert dedup
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('11. Memory Provenance & Dedup');
+  console.log('──────────────────────────────────────────');
+
+  await test('Memory stores source_ref and source_event_id', () => {
+    const fakeEventId = 42;
+    const mem = addMemory(PROJECT_ID, 'decision', 'Use ESM everywhere.', undefined, 0.8, 'ADR-ESM', fakeEventId);
+    assert(mem.source_ref === 'ADR-ESM', `Expected source_ref 'ADR-ESM', got ${mem.source_ref}`);
+    assert(mem.source_event_id === fakeEventId, `Expected source_event_id ${fakeEventId}, got ${mem.source_event_id}`);
+    // Round-trip: should appear in getMemories
+    const list = getMemories(PROJECT_ID);
+    const found = list.find(m => m.source_ref === 'ADR-ESM');
+    assert(found !== undefined, 'Memory with source_ref not found in list');
+    assert(found!.source_event_id === fakeEventId, 'source_event_id not persisted');
+  });
+
+  await test('Upserting same source_ref updates content, not duplicates', () => {
+    addMemory(PROJECT_ID, 'decision', 'Use ESM everywhere.', undefined, 0.8, 'ADR-ESM', 42);
+    addMemory(PROJECT_ID, 'decision', 'Use ESM everywhere — confirmed.', undefined, 0.9, 'ADR-ESM', 43);
+    const list = getMemories(PROJECT_ID);
+    const matches = list.filter(m => m.source_ref === 'ADR-ESM');
+    assert(matches.length === 1, `Expected 1 memory for source_ref 'ADR-ESM', got ${matches.length}`);
+    assert(matches[0].content === 'Use ESM everywhere — confirmed.', 'Content not updated on upsert');
+    assert(matches[0].source_event_id === 43, 'source_event_id not updated on upsert');
+  });
+
+  await test('Memories without source_ref are always inserted (no conflict)', () => {
+    const a = addMemory(PROJECT_ID, 'summary', 'Summary A', undefined, 0.5);
+    const b = addMemory(PROJECT_ID, 'summary', 'Summary A', undefined, 0.5); // same content, no source_ref
+    assert(a.id !== b.id, 'Two memories without source_ref should get distinct IDs');
+  });
+
+  // =========================================================================
+  // 12. SNAPSHOT INTEGRITY — SHA-256 checksum validation
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('12. Snapshot Integrity');
+  console.log('──────────────────────────────────────────');
+
+  await test('Snapshot has non-empty sha256_hex after creation', () => {
+    // Force a snapshot by materializing with triggerSnapshotCheck=true after enough events
+    for (let i = 0; i < 105; i++) {
+      appendEvent(PROJECT_ID, CLIENT_A, 'RULE_ADDED', { rule_id: randomUUID(), content: `Integrity-test rule ${i}` });
+    }
+    invalidateProjectCache(PROJECT_ID);
+    materializeProject(PROJECT_ID, true);
+    const db = getDb();
+    const row = db.prepare(
+      'SELECT sha256_hex FROM snapshots WHERE project_id = ? ORDER BY event_id DESC LIMIT 1'
+    ).get(PROJECT_ID) as any;
+    assert(row !== undefined, 'No snapshot found');
+    assert(typeof row.sha256_hex === 'string' && row.sha256_hex.length === 64,
+      `Expected 64-char sha256_hex, got: "${row.sha256_hex}"`);
+  });
+
+  await test('Corrupted snapshot is skipped; prior clean snapshot is used', () => {
+    const db = getDb();
+    // Deliberately corrupt the latest snapshot's JSON
+    db.prepare(
+      `UPDATE snapshots SET snapshot_json = 'CORRUPTED', sha256_hex = 'badhash'
+       WHERE project_id = ? AND event_id = (
+         SELECT MAX(event_id) FROM snapshots WHERE project_id = ?
+       )`
+    ).run(PROJECT_ID, PROJECT_ID);
+
+    // Cold reload should skip corrupted snapshot and fall back to the prior one
+    invalidateProjectCache(PROJECT_ID);
+    let state: any;
+    let threw = false;
+    try {
+      state = materializeProject(PROJECT_ID, false);
+    } catch {
+      threw = true;
+    }
+    assert(!threw, 'materializeProject should not throw on corrupted snapshot');
+    assert(state !== undefined && typeof state.todos === 'object',
+      'State should still be valid after corrupt snapshot fallback');
+  });
+
+  // =========================================================================
+  // 13. ACTIVE SESSIONS — getActiveSessions
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('13. Active Sessions');
+  console.log('──────────────────────────────────────────');
+
+  const PROJECT_SESSIONS = 'project-sessions-test';
+  const SESS_ACTIVE_A = 'active-sess-a';
+  const SESS_ACTIVE_B = 'active-sess-b';
+  const SESS_DEAD_TEST = 'dead-sess-test';
+
+  await test('getActiveSessions returns only alive/stale sessions', () => {
+    registerSession(PROJECT_SESSIONS, SESS_ACTIVE_A, 'AgentA');
+    registerSession(PROJECT_SESSIONS, SESS_ACTIVE_B, 'AgentB');
+    registerSession(PROJECT_SESSIONS, SESS_DEAD_TEST, 'AgentDead');
+    gracefulDisconnect(PROJECT_SESSIONS, SESS_DEAD_TEST);
+
+    const active = getActiveSessions(PROJECT_SESSIONS);
+    const ids = active.map(s => s.id);
+    assert(ids.includes(SESS_ACTIVE_A), 'Active session A should appear');
+    assert(ids.includes(SESS_ACTIVE_B), 'Active session B should appear');
+    assert(!ids.includes(SESS_DEAD_TEST), 'Dead session should not appear in active list');
+  });
+
+  await test('getActiveSessions returns empty array for unknown project', () => {
+    const active = getActiveSessions('project-that-does-not-exist');
+    assert(Array.isArray(active), 'Should return an array');
+    assert(active.length === 0, 'Should be empty for unknown project');
+  });
+
+  await test('getActiveSessions is scoped per project', () => {
+    const OTHER_PROJ = 'other-proj-isolation';
+    const OTHER_SESS = 'other-sess-1';
+    registerSession(OTHER_PROJ, OTHER_SESS, 'OtherAgent');
+
+    const activeSessions = getActiveSessions(PROJECT_SESSIONS);
+    const ids = activeSessions.map(s => s.id);
+    assert(!ids.includes(OTHER_SESS), 'Session from other project should not appear');
+
+    const otherActive = getActiveSessions(OTHER_PROJ);
+    assert(otherActive.some(s => s.id === OTHER_SESS), 'Session should appear in its own project');
+  });
+
+  await test('Session records contain correct project_id and client_type', () => {
+    const active = getActiveSessions(PROJECT_SESSIONS);
+    const sessA = active.find(s => s.id === SESS_ACTIVE_A);
+    assert(sessA !== undefined, 'SESS_ACTIVE_A not found');
+    assert(sessA!.project_id === PROJECT_SESSIONS, `project_id mismatch: ${sessA!.project_id}`);
+    assert(sessA!.client_type === 'AgentA', `client_type mismatch: ${sessA!.client_type}`);
+    assert(sessA!.created_at > 0, 'created_at should be a positive timestamp');
+    assert(sessA!.last_heartbeat > 0, 'last_heartbeat should be a positive timestamp');
+  });
+
+  // =========================================================================
+  // 14. STRUCTURED HANDOFF PAYLOAD — generateStructuredHandoff
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('14. Structured Handoff Payload');
+  console.log('──────────────────────────────────────────');
+
+  const PROJECT_HO = 'project-handoff-payload';
+  const SESS_HO = 'sess-handoff-writer';
+
+  await test('generateStructuredHandoff captures completed TODOs in session', () => {
+    registerSession(PROJECT_HO, SESS_HO, 'HandoffAgent');
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_HO, PROJECT_HO);
+
+    const todoId = getNextSequenceValue(PROJECT_HO, 'todo');
+    appendEvent(PROJECT_HO, SESS_HO, 'TODO_CREATED', { todo_id: todoId, title: 'HO Task', priority: 'high' });
+    appendEvent(PROJECT_HO, SESS_HO, 'TODO_COMPLETED', { todo_id: todoId, version: 1 });
+
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
+    assert(handoff.session_id === SESS_HO, 'session_id mismatch in handoff payload');
+    assert(Array.isArray(handoff.completed_todos), 'completed_todos should be an array');
+    assert(
+      handoff.completed_todos.some((t: string) => t.includes(String(todoId))),
+      `completed_todos should contain TODO ID ${todoId}`
+    );
+    assert(Array.isArray(handoff.pending_todos), 'pending_todos should be an array');
+  });
+
+  await test('generateStructuredHandoff captures pending (created but not completed) TODOs', () => {
+    const todoId = getNextSequenceValue(PROJECT_HO, 'todo');
+    appendEvent(PROJECT_HO, SESS_HO, 'TODO_CREATED', { todo_id: todoId, title: 'Pending HO Task', priority: 'medium' });
+
+    // Update last_event_seen checkpoint so generateStructuredHandoff picks up only new events
+    const db = getDb();
+    const latestEvent = db.prepare(
+      'SELECT id FROM events WHERE project_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1'
+    ).get(PROJECT_HO, SESS_HO) as any;
+    db.prepare('UPDATE sessions SET last_event_seen = ? WHERE id = ?').run(0, SESS_HO);
+
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
+    assert(
+      handoff.pending_todos.some((t: string) => t.includes(String(todoId))),
+      `pending_todos should contain TODO ID ${todoId}`
+    );
+  });
+
+  await test('generateStructuredHandoff captures rules added in session', () => {
+    const db = getDb();
+    db.prepare('UPDATE sessions SET last_event_seen = 0 WHERE id = ?').run(SESS_HO);
+
+    const ruleId = randomUUID();
+    appendEvent(PROJECT_HO, SESS_HO, 'RULE_ADDED', { rule_id: ruleId, content: 'Use strict TypeScript' });
+
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
+    assert(Array.isArray(handoff.rules_added), 'rules_added should be an array');
+    assert(
+      handoff.rules_added.includes('Use strict TypeScript'),
+      'rules_added should contain the rule content'
+    );
+  });
+
+  await test('generateStructuredHandoff captures decisions and wiki in session', () => {
+    const db = getDb();
+    db.prepare('UPDATE sessions SET last_event_seen = 0 WHERE id = ?').run(SESS_HO);
+
+    appendEvent(PROJECT_HO, SESS_HO, 'DECISION_RECORDED', {
+      decision_id: 'ADR-HO-1',
+      title: 'Use WAL mode',
+      context: 'Performance',
+      decision: 'Enable WAL'
+    });
+    appendEvent(PROJECT_HO, SESS_HO, 'WIKI_UPDATED', { topic: 'HO-Wiki', content: 'Some content.' });
+
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
+    assert(Array.isArray(handoff.recent_decisions), 'recent_decisions should be an array');
+    assert(handoff.recent_decisions.length > 0, 'recent_decisions should not be empty');
+    assert(Array.isArray(handoff.wiki_updated), 'wiki_updated should be an array');
+    assert(handoff.wiki_updated.includes('HO-Wiki'), 'wiki_updated should contain the topic');
+  });
+
+  await test('generateStructuredHandoff ungraceful summary mentions heartbeat timeout', () => {
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'ungraceful');
+    assert(typeof handoff.summary === 'string', 'summary should be a string');
+    assert(
+      handoff.summary.toLowerCase().includes('heartbeat') || handoff.summary.toLowerCase().includes('lost'),
+      `Ungraceful summary should mention heartbeat/lost, got: "${handoff.summary}"`
+    );
+    assert(typeof handoff.timestamp === 'number' && handoff.timestamp > 0, 'timestamp should be positive');
+  });
+
+  await test('Deleted TODOs are excluded from pending_todos in handoff', () => {
+    const db = getDb();
+    db.prepare('UPDATE sessions SET last_event_seen = 0 WHERE id = ?').run(SESS_HO);
+
+    const todoId = getNextSequenceValue(PROJECT_HO, 'todo');
+    appendEvent(PROJECT_HO, SESS_HO, 'TODO_CREATED', { todo_id: todoId, title: 'To Delete', priority: 'low' });
+    appendEvent(PROJECT_HO, SESS_HO, 'TODO_DELETED', { todo_id: todoId });
+
+    const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
+    assert(
+      !handoff.pending_todos.some((t: string) => t.includes(String(todoId))),
+      'Deleted TODO should not appear in pending_todos'
+    );
+  });
+
+  // =========================================================================
+  // 15. LIFECYCLE MONITOR — stale/dead transitions
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('15. Lifecycle Monitor (stale/dead transitions)');
+  console.log('──────────────────────────────────────────');
+
+  await test('startLifecycleMonitor does not throw and can be stopped', () => {
+    startLifecycleMonitor(500); // 500ms interval for test speed
+    stopLifecycleMonitor();
+    // No assertion needed — if it throws the test fails
+  });
+
+  await test('startLifecycleMonitor is idempotent (double-start does not duplicate timer)', () => {
+    startLifecycleMonitor(500);
+    startLifecycleMonitor(500); // second call should be a no-op
+    stopLifecycleMonitor();
+    // Verify stop is also idempotent
+    stopLifecycleMonitor();
+  });
+
+  await test('Session manually set to stale appears in getActiveSessions', () => {
+    const PROJECT_STALE = 'project-stale-test';
+    const SESS_STALE = 'stale-session-1';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_STALE, PROJECT_STALE);
+    registerSession(PROJECT_STALE, SESS_STALE, 'StaleAgent');
+
+    // Manually force status to stale (simulating what the monitor does)
+    db.prepare(`UPDATE sessions SET status = 'stale' WHERE id = ?`).run(SESS_STALE);
+
+    const active = getActiveSessions(PROJECT_STALE);
+    const found = active.find(s => s.id === SESS_STALE);
+    assert(found !== undefined, 'Stale session should still appear in getActiveSessions');
+    assert(found!.status === 'stale', `Expected status 'stale', got '${found!.status}'`);
+  });
+
+  await test('Session marked dead is excluded from getActiveSessions', () => {
+    const PROJECT_DEAD = 'project-dead-test';
+    const SESS_DEAD = 'dead-session-lifecycle';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_DEAD, PROJECT_DEAD);
+    registerSession(PROJECT_DEAD, SESS_DEAD, 'DeadAgent');
+
+    // Manually force to dead (simulating monitor's dead transition)
+    db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(SESS_DEAD);
+
+    const active = getActiveSessions(PROJECT_DEAD);
+    assert(!active.some(s => s.id === SESS_DEAD), 'Dead session should not appear in getActiveSessions');
+  });
+
+  // =========================================================================
+  // 16. INPUT VALIDATION — validateProjectId, validateSessionId, sanitizeInput
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('16. Input Validation (validators & sanitizers)');
+  console.log('──────────────────────────────────────────');
+
+  await test('validateProjectId accepts valid IDs', () => {
+    // Should not throw
+    validateProjectId('my-project');
+    validateProjectId('my_project_123');
+    validateProjectId('UPPER-LOWER-123');
+  });
+
+  await test('validateProjectId rejects IDs with special characters', () => {
+    assertThrows(() => validateProjectId('bad project!'), 'Invalid project_id');
+    assertThrows(() => validateProjectId('proj/path'), 'Invalid project_id');
+    assertThrows(() => validateProjectId('proj.name'), 'Invalid project_id');
+    assertThrows(() => validateProjectId(''), 'Invalid project_id');
+  });
+
+  await test('validateSessionId accepts valid IDs', () => {
+    validateSessionId('claude-abc');
+    validateSessionId('cursor_123');
+    validateSessionId('agent-X-99');
+  });
+
+  await test('validateSessionId rejects IDs with spaces or special characters', () => {
+    assertThrows(() => validateSessionId('bad session'), 'Invalid session_id');
+    assertThrows(() => validateSessionId('sess@host'), 'Invalid session_id');
+    assertThrows(() => validateSessionId('sess:port'), 'Invalid session_id');
+  });
+
+  await test('registerSession throws on invalid project_id', () => {
+    assertThrows(
+      () => registerSession('invalid project!', 'sess-valid', 'Agent'),
+      'Invalid project_id'
+    );
+  });
+
+  await test('registerSession throws on invalid session_id', () => {
+    assertThrows(
+      () => registerSession('valid-project', 'bad session@id', 'Agent'),
+      'Invalid session_id'
+    );
+  });
+
+  await test('sanitizeInput strips control characters', () => {
+    const dirty = 'hello\x01world\x07test\x1Fend';
+    const clean = sanitizeInput(dirty);
+    assert(!clean.includes('\x01'), 'Control char \\x01 should be removed');
+    assert(!clean.includes('\x07'), 'Control char \\x07 should be removed');
+    assert(!clean.includes('\x1F'), 'Control char \\x1F should be removed');
+    assert(clean.includes('hello'), 'Normal text should be preserved');
+  });
+
+  await test('sanitizeInput preserves newlines and tabs', () => {
+    const input = 'line1\nline2\ttabbed';
+    const result = sanitizeInput(input);
+    assert(result.includes('\n'), 'Newlines should be preserved');
+    assert(result.includes('\t'), 'Tabs should be preserved');
+  });
+
+  await test('sanitizeInput throws when input exceeds max length', () => {
+    const oversized = 'x'.repeat(10001);
+    assertThrows(() => sanitizeInput(oversized), 'maximum length');
+  });
+
+  await test('sanitizeTitle throws when title exceeds max title length', () => {
+    const oversized = 'x'.repeat(501);
+    assertThrows(() => sanitizeTitle(oversized), 'maximum length');
+  });
+
+  // =========================================================================
+  // 17. SHA-256 UTILITY — sha256hex
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('17. sha256hex Utility');
+  console.log('──────────────────────────────────────────');
+
+  await test('sha256hex produces 64-char hex string', () => {
+    const result = sha256hex('hello world');
+    assert(typeof result === 'string', 'Should return a string');
+    assert(result.length === 64, `Expected 64 chars, got ${result.length}`);
+    assert(/^[0-9a-f]+$/.test(result), 'Should be lowercase hex');
+  });
+
+  await test('sha256hex is deterministic', () => {
+    const a = sha256hex('consistent input');
+    const b = sha256hex('consistent input');
+    assert(a === b, 'Same input should always produce same hash');
+  });
+
+  await test('sha256hex produces different output for different inputs', () => {
+    const a = sha256hex('input A');
+    const b = sha256hex('input B');
+    assert(a !== b, 'Different inputs should produce different hashes');
+  });
+
+  await test('sha256hex handles empty string', () => {
+    const result = sha256hex('');
+    assert(result.length === 64, 'Empty string should still produce 64-char hash');
+    // Known SHA-256 of empty string
+    assert(result === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      `Unexpected SHA-256 of empty string: ${result}`);
+  });
+
+  // =========================================================================
+  // 18. SNAPSHOT RETENTION — only last 3 kept
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('18. Snapshot Retention (max 3)');
+  console.log('──────────────────────────────────────────');
+
+  await test('Snapshot table retains at most 3 snapshots per project', () => {
+    const PROJECT_SNAP = 'project-snap-retention';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_SNAP, PROJECT_SNAP);
+
+    // Trigger 4 snapshot cycles (each needs 100+ events)
+    for (let cycle = 0; cycle < 4; cycle++) {
+      for (let i = 0; i < 105; i++) {
+        appendEvent(PROJECT_SNAP, 'agent-snap', 'RULE_ADDED', {
+          rule_id: randomUUID(),
+          content: `Retention cycle ${cycle} rule ${i}`
+        });
+      }
+      invalidateProjectCache(PROJECT_SNAP);
+      materializeProject(PROJECT_SNAP, true);
+    }
+
+    const count = (db.prepare(
+      'SELECT COUNT(*) as c FROM snapshots WHERE project_id = ?'
+    ).get(PROJECT_SNAP) as any).c;
+
+    assert(count <= 3, `Expected at most 3 snapshots, got ${count}`);
+    assert(count >= 1, 'Expected at least 1 snapshot to exist');
   });
 
   // =========================================================================
