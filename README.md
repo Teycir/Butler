@@ -41,17 +41,42 @@ Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process e
 
 ## ⏱️ Quickstart in 60 Seconds
 
-### 1. Boot the server and run the test suite:
+### 1. Clone:
 ```bash
-npm install
-npm test
+git clone https://github.com/Teycir/Butler.git
+cd Butler
 ```
 
-### 2. Build and connect to your agent:
+### 2. Install — choose your method:
+
+#### Option A: Automatic installer (recommended)
+
+**Linux / macOS:**
 ```bash
+bash install/install.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\install\install.ps1
+```
+
+The installer will:
+- Build Butler from source
+- Deploy the release to `~/Mcp/butler-mcp/`
+- Auto-configure **Claude Desktop**, **Kiro CLI**, **Kilo Code**, **VS Code**, and **Cursor**
+
+> **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
+
+#### Option B: Manual setup
+
+```bash
+npm install
 npm run build
 ```
-Then add this to your Claude Desktop config (e.g., `~/.config/Claude/claude_desktop_config.json`):
+
+Then add Butler to your AI client's MCP config manually:
+
 ```json
 {
   "mcpServers": {
@@ -59,12 +84,22 @@ Then add this to your Claude Desktop config (e.g., `~/.config/Claude/claude_desk
       "command": "node",
       "args": ["/absolute/path/to/Butler/dist/index.js"],
       "env": {
-        "BUTLER_DB_PATH": ".butler/butler.db"
+        "BUTLER_DB_PATH": "/absolute/path/to/butler.db"
       }
     }
   }
 }
 ```
+
+Config file locations:
+- **Claude Desktop (Linux):** `~/.config/Claude/claude_desktop_config.json`
+- **Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
+- **VS Code / Cursor:** `mcp.json` in your user settings directory
+- **Kiro CLI:** `~/.config/kiro-cli/mcp.json`
+- **Kilo Code:** `~/.config/Antigravity/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json`
+
+Restart your AI clients and Butler is ready.
 
 ---
 
@@ -164,33 +199,28 @@ Imagine this workflow:
 ## ⚡ Quickstart
 
 ### 1. Installation
-Clone the repository and install dependencies locally.
 ```bash
 git clone https://github.com/Teycir/Butler.git
 cd Butler
-npm install
 ```
+
+**Linux / macOS:**
+```bash
+bash install/install.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\install\install.ps1
+```
+
+The installer builds Butler, deploys the release to `~/Mcp/butler-mcp/`, and auto-configures Claude Desktop, Kiro CLI, Kilo Code, VS Code, and Cursor. Restart your AI clients and Butler is ready.
+
+> **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
 
 ### 2. Run the Verification Suite
-Butler features an advanced integration test suite validating SQLite concurrency, atomic sequences, incremental caching, and vector indexing:
 ```bash
 npm test
-```
-
-### 3. Connect to Claude Desktop
-Add Butler as an MCP server in your Claude Desktop configuration file (e.g. `~/.config/Claude/claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "butler": {
-      "command": "node",
-      "args": ["/absolute/path/to/Butler/dist/index.js"],
-      "env": {
-        "BUTLER_DB_PATH": ".butler/butler.db"
-      }
-    }
-  }
-}
 ```
 
 ---
