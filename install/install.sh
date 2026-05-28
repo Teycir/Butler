@@ -86,3 +86,28 @@ echo "🎉 Done! Restart your AI clients to activate Butler."
 echo ""
 echo "   Manual snippet:"
 echo "   \"butler\": { \"command\": \"$NODE_BIN\", \"args\": [\"$ENTRY\"], \"env\": { \"BUTLER_DB_PATH\": \"$DB_PATH\" } }"
+echo ""
+echo "──────────────────────────────────────────────────────────────────"
+echo "📋  SYSTEM PROMPT SNIPPET — paste this into your AI client once:"
+echo "──────────────────────────────────────────────────────────────────"
+SNIPPET="On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = \"<client>-<4 random chars>\", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect."
+echo ""
+echo "$SNIPPET"
+echo ""
+
+# Offer clipboard copy (Linux: xclip/xsel, macOS: pbcopy)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  if command -v pbcopy &>/dev/null; then
+    echo "$SNIPPET" | pbcopy
+    echo "✅ Snippet copied to clipboard (pbcopy)."
+  fi
+elif command -v xclip &>/dev/null; then
+  echo "$SNIPPET" | xclip -selection clipboard
+  echo "✅ Snippet copied to clipboard (xclip)."
+elif command -v xsel &>/dev/null; then
+  echo "$SNIPPET" | xsel --clipboard --input
+  echo "✅ Snippet copied to clipboard (xsel)."
+else
+  echo "💡 Copy the snippet above manually (no clipboard tool detected)."
+fi
+echo "──────────────────────────────────────────────────────────────────"

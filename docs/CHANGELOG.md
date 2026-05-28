@@ -1,5 +1,36 @@
 # Butler Changelog
 
+## [Unreleased] - 2026-05-28
+
+### Phase 2 — Handoff Quality
+
+#### 2.1 — Smarter Handoff Summaries
+- `generateStructuredHandoff` now produces a structured diff view instead of raw event counts
+- Todo labels now include titles (e.g. `"Fix login bug" (ID 3)`) instead of bare IDs
+- Ungraceful (heartbeat-timeout) handoffs include a formatted `diff_summary` field with emoji-prefixed change lines (✅ completed, 🔲 pending, 🗑️ deleted, ✏️ updated, 📌 rules, 💡 decisions, 📚 wiki)
+- `deleted_todos` and `rules_removed` are now tracked and surfaced separately
+- Duplicate wiki topics are deduplicated in handoff payloads
+
+#### 2.2 — Handoff Diff Resource
+- New resource: `butler://projects/{id}/diff?since={eventId}`
+- Returns a compact, human-readable changelog of all state-changing events since a given event ID
+- Response includes `total_changes`, `entries` (chronological), and `grouped` (by event type prefix)
+- Callers who reconnect after a gap can use `last_event_id` from the `/context` raw payload as the `since` parameter
+- URI parser updated to support query string parameters (`?key=value`) across all resources
+
+#### 2.3 — Context Staleness Signals
+- `/context` resource now opens with a freshness badge: `🟢` (live session active) or `🔴` (no live session)
+- Shows age of the last live heartbeat in human-readable form (e.g. `5s ago`, `12m ago`)
+- Raw JSON payload now includes a `staleness` block (`last_live_heartbeat`, `has_live_session`, `events_since_last_read`, `context_age_seconds`) and `last_event_id`
+
+#### 2.4 — Agent-Narrated Handoff Quality Score
+- `handoffcreate` now computes a quality score (0–100%) on the provided summary and returns it as inline feedback
+- Low-quality handoffs (< 40%) surface a ⚠️ coaching message; high-quality (≥ 80%) get a ✅ confirmation
+- The `/context` resource renders quality scores inline on all agent-narrated handoffs
+- `computeHandoffQualityScore` is exported from `lifecycle.ts` for reuse
+
+---
+
 ## [Unreleased] - 2026-05-27
 
 ### Fixed (Second Review)

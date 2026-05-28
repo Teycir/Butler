@@ -49,6 +49,14 @@ export function getEvents(projectId: string, sinceEventId: number = 0): EventRec
   }));
 }
 
+/**
+ * Returns all events for a project since a given event ID, across all sessions.
+ * Used for diff generation (Phase 2.2).
+ */
+export function getEventsSince(projectId: string, sinceEventId: number): EventRecord[] {
+  return getEvents(projectId, sinceEventId);
+}
+
 export function getSessionEvents(projectId: string, sessionId: string, sinceEventId: number = 0): EventRecord[] {
   const db = getDb();
   const stmt = db.prepare(`

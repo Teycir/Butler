@@ -1,14 +1,31 @@
+/**
+ * coordinator/lifecycle.ts
+ *
+ * Session CRUD, heartbeat processing, and the background lifecycle monitor.
+ * Phase 2 additions (handoff generation, diff, staleness) live in sibling files:
+ *   - handoff.ts  — generateStructuredHandoff, computeHandoffQualityScore
+ *   - diff.ts     — getProjectDiff, getContextStaleness
+ */
+
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { getDb } from '../db/database.js';
-import { appendEvent, getSessionEvents } from '../events/store.js';
+import { appendEvent, getEvents } from '../events/store.js';
 import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
 import { validateProjectId, validateSessionId } from '../validation.js';
-import { 
-  SESSION_STALE_THRESHOLD_SECS, 
+import {
+  SESSION_STALE_THRESHOLD_SECS,
   SESSION_DEAD_THRESHOLD_SECS,
   SNAPSHOT_CHECK_INTERVAL_SECS,
   now as getCurrentTimestamp
 } from '../constants.js';
+import { generateStructuredHandoff } from './handoff.js';
+
+// Re-export Phase 2 helpers so callers can import everything from 'lifecycle'
+export { generateStructuredHandoff, computeHandoffQualityScore } from './handoff.js';
+export { getProjectDiff, getContextStaleness } from './diff.js';
+export type { DiffEntry, ContextStalenessInfo } from './diff.js';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SessionRecord {
   id: string;
@@ -20,33 +37,33 @@ export interface SessionRecord {
   last_event_seen: number;
 }
 
-export function registerSession(projectId: string, sessionId: string, clientType: string): SessionRecord {
+// ─── Session CRUD ─────────────────────────────────────────────────────────────
+
+export function registerSession(
+  projectId: string,
+  sessionId: string,
+  clientType: string
+): SessionRecord {
   validateProjectId(projectId);
   validateSessionId(sessionId);
-  
+
   const db = getDb();
   const now = getCurrentTimestamp();
 
   const registerTx = db.transaction(() => {
-    // Verify/Insert project if not exists to satisfy foreign key constraints
     db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
 
-    // Check if session exists
     const existing = db.prepare(`
-      SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen 
-      FROM sessions 
-      WHERE id = ?
+      SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
+      FROM sessions WHERE id = ?
     `).get(sessionId) as any;
 
     if (existing) {
       const event = appendEvent(projectId, sessionId, 'SESSION_RECOVERED', {
-        session_id: sessionId,
-        client_type: clientType,
-        timestamp: now
+        session_id: sessionId, client_type: clientType, timestamp: now
       });
-
       db.prepare(`
-        UPDATE sessions 
+        UPDATE sessions
         SET status = 'alive', last_heartbeat = ?, client_type = ?, project_id = ?, last_event_seen = ?
         WHERE id = ?
       `).run(now, clientType, projectId, event.id, sessionId);
@@ -57,16 +74,9 @@ export function registerSession(projectId: string, sessionId: string, clientType
       `).run(sessionId, projectId, clientType, now);
 
       const event = appendEvent(projectId, sessionId, 'SESSION_CONNECTED', {
-        session_id: sessionId,
-        client_type: clientType,
-        timestamp: now
+        session_id: sessionId, client_type: clientType, timestamp: now
       });
-
-      db.prepare(`
-        UPDATE sessions
-        SET last_event_seen = ?
-        WHERE id = ?
-      `).run(event.id, sessionId);
+      db.prepare(`UPDATE sessions SET last_event_seen = ? WHERE id = ?`).run(event.id, sessionId);
     }
   });
 
@@ -78,10 +88,9 @@ export function getSession(sessionId: string): SessionRecord | null {
   const db = getDb();
   const row = db.prepare(`
     SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
-    FROM sessions 
-    WHERE id = ?
+    FROM sessions WHERE id = ?
   `).get(sessionId) as any;
-  
+
   if (!row) return null;
   return {
     id: row.id,
@@ -114,22 +123,33 @@ export function getActiveSessions(projectId: string): SessionRecord[] {
 }
 
 export function processHeartbeat(projectId: string, sessionId: string): void {
-  const db = getDb();
-  const now = getCurrentTimestamp();
-  
   const sess = getSession(sessionId);
   if (!sess) {
-    throw new McpError(ErrorCode.InvalidRequest, `Session ${sessionId} is not registered in project ${projectId}. Please call session.register first.`);
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Session ${sessionId} is not registered in project ${projectId}. Please call sessionregister first.`
+    );
   }
   if (sess.project_id !== projectId) {
-    throw new McpError(ErrorCode.InvalidRequest, `Session ${sessionId} is registered in project ${sess.project_id}, but request is for project ${projectId}.`);
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Session ${sessionId} is registered in project ${sess.project_id}, but request is for project ${projectId}.`
+    );
   }
+  getDb().prepare(`UPDATE sessions SET status = 'alive', last_heartbeat = ? WHERE id = ?`)
+    .run(getCurrentTimestamp(), sessionId);
+}
 
-  db.prepare(`
-    UPDATE sessions 
-    SET status = 'alive', last_heartbeat = ?
-    WHERE id = ?
-  `).run(now, sessionId);
+export function ensureSession(
+  projectId: string,
+  sessionId: string,
+  clientType = 'unknown'
+): { session: SessionRecord; wasAutoRegistered: boolean } {
+  const existing = getSession(sessionId);
+  if (existing && existing.project_id === projectId && existing.status !== 'dead') {
+    return { session: existing, wasAutoRegistered: false };
+  }
+  return { session: registerSession(projectId, sessionId, clientType), wasAutoRegistered: true };
 }
 
 export function validateSession(projectId: string, sessionId: string): void {
@@ -137,7 +157,7 @@ export function validateSession(projectId: string, sessionId: string): void {
   if (!sess) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Session ${sessionId} is not registered. Please call session.register first.`
+      `Session ${sessionId} is not registered. Please call sessionregister first.`
     );
   }
   if (sess.project_id !== projectId) {
@@ -155,210 +175,86 @@ export function validateSession(projectId: string, sessionId: string): void {
 }
 
 export function updateLastEventSeen(sessionId: string, eventId: number): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE sessions 
-    SET last_event_seen = ?
-    WHERE id = ?
-  `).run(eventId, sessionId);
+  getDb().prepare(`UPDATE sessions SET last_event_seen = ? WHERE id = ?`).run(eventId, sessionId);
 }
 
 export function gracefulDisconnect(projectId: string, sessionId: string): void {
   validateSession(projectId, sessionId);
-  
+
   const db = getDb();
   const now = getCurrentTimestamp();
-  
-  const disconnectTx = db.transaction(() => {
-    // NOTE: generateStructuredHandoff reads from the DB (getSession, getSessionEvents)
-    // inside this write transaction. This is safe and intentional: it reads last_event_seen
-    // from the session's *previous* checkpoint (before the UPDATE below), which is the
-    // correct boundary for determining which events belong to this session's final handoff.
-    const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
 
+  const disconnectTx = db.transaction(() => {
+    const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
     const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
       session_id: sessionId,
       timestamp: now,
-      handoff: handoff
+      handoff
     });
-
     updateLastEventSeen(sessionId, event.id);
-    
-    db.prepare(`
-      UPDATE sessions 
-      SET status = 'dead', last_heartbeat = ?
-      WHERE id = ?
-    `).run(now, sessionId);
+    db.prepare(`UPDATE sessions SET status = 'dead', last_heartbeat = ? WHERE id = ?`)
+      .run(now, sessionId);
   });
-  
+
   disconnectTx();
-  
-  // Invalidate cache after transaction commits (consistent with lifecycle monitor pattern)
   invalidateProjectCache(projectId);
 }
 
-export function generateStructuredHandoff(
-  projectId: string,
-  sessionId: string,
-  type: 'graceful' | 'ungraceful'
-): Record<string, any> {
-  const sess = getSession(sessionId);
-  const sinceEventId = sess ? sess.last_event_seen : 0;
-
-  // Fetch only events since last checkpoint for this session
-  const sessionEvents = getSessionEvents(projectId, sessionId, sinceEventId);
-
-  const completedTodos: string[] = [];
-  const createdTodoIds = new Set<number>();
-  const completedTodoIds = new Set<number>();
-  const deletedTodoIds = new Set<number>();
-  const rulesAdded: string[] = [];
-  const decisionsRecorded: string[] = [];
-  const wikiUpdated: string[] = [];
-
-  for (const event of sessionEvents) {
-    let payload: any;
-    try {
-      payload = JSON.parse(event.payload);
-    } catch {
-      continue;
-    }
-
-    switch (event.type) {
-      case 'TODO_COMPLETED':
-        if (payload.todo_id != null) {
-          completedTodos.push(`TODO ID ${payload.todo_id}`);
-          completedTodoIds.add(Number(payload.todo_id));
-        }
-        break;
-      case 'TODO_CREATED':
-        if (payload.todo_id != null) {
-          createdTodoIds.add(Number(payload.todo_id));
-        }
-        break;
-      case 'TODO_UPDATED':
-        if (payload.todo_id != null && payload.status === 'completed') {
-          completedTodos.push(`TODO ID ${payload.todo_id}`);
-          completedTodoIds.add(Number(payload.todo_id));
-        }
-        break;
-      case 'TODO_DELETED':
-        if (payload.todo_id != null) {
-          deletedTodoIds.add(Number(payload.todo_id));
-        }
-        break;
-      case 'RULE_ADDED':
-        rulesAdded.push(payload.content);
-        break;
-      case 'DECISION_RECORDED':
-        decisionsRecorded.push(`"${payload.title}": ${payload.decision}`);
-        break;
-      case 'WIKI_UPDATED':
-        wikiUpdated.push(payload.topic);
-        break;
-    }
-  }
-
-  // Pending TODOs = created but not completed or deleted in this session
-  const pendingTodoIds = [...createdTodoIds].filter(id => !completedTodoIds.has(id) && !deletedTodoIds.has(id));
-  const pendingTodos = pendingTodoIds.map(id => `TODO ID ${id}`);
-
-  const summary = type === 'graceful'
-    ? `Graceful end of session for agent ${sessionId}.`
-    : `Session ${sessionId} lost connection (missed heartbeat). Auto-generated continuity marker.`;
-
-  return {
-    session_id: sessionId,
-    completed_todos: completedTodos,
-    pending_todos: pendingTodos,
-    recent_decisions: decisionsRecorded,
-    rules_added: rulesAdded,
-    wiki_updated: wikiUpdated,
-    summary,
-    timestamp: getCurrentTimestamp()
-  };
-}
+// ─── Lifecycle Monitor ────────────────────────────────────────────────────────
 
 let lifecycleTimer: NodeJS.Timeout | null = null;
 
-export function startLifecycleMonitor(checkIntervalMs: number = 15000): void {
+export function startLifecycleMonitor(checkIntervalMs = 15000): void {
   if (lifecycleTimer) return;
 
-  let lastSnapshotTime: number = getCurrentTimestamp();
+  let lastSnapshotTime = getCurrentTimestamp();
 
   lifecycleTimer = setInterval(() => {
     const db = getDb();
     const now = getCurrentTimestamp();
 
-    // 1. Sessions transitioning to STALE (60s < age <= 300s)
-    // Upper bound prevents overlap with dead transition
+    // 1. alive → stale (missed heartbeat, but not yet dead)
     const staleRows = db.prepare(`
-      SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen 
-      FROM sessions
-      WHERE status = 'alive' 
+      SELECT id, project_id FROM sessions
+      WHERE status = 'alive'
         AND (? - last_heartbeat) > ?
         AND (? - last_heartbeat) <= ?
     `).all(now, SESSION_STALE_THRESHOLD_SECS, now, SESSION_DEAD_THRESHOLD_SECS) as any[];
 
-    const staleTransition = db.transaction(() => {
+    db.transaction(() => {
       for (const row of staleRows) {
         db.prepare(`UPDATE sessions SET status = 'stale' WHERE id = ?`).run(row.id);
-        appendEvent(row.project_id, row.id, 'SESSION_STALE', {
-          session_id: row.id,
-          timestamp: now
-        });
+        appendEvent(row.project_id, row.id, 'SESSION_STALE', { session_id: row.id, timestamp: now });
       }
-    });
-    staleTransition();
-    
-    // Invalidate caches after transaction commits
-    for (const row of staleRows) {
-      invalidateProjectCache(row.project_id);
-    }
+    })();
+    for (const row of staleRows) invalidateProjectCache(row.project_id);
 
-    // 2. Sessions transitioning to DEAD (age > 300s)
-    // Also catches 'alive' sessions that skipped the stale window (e.g. process pause / delayed tick)
+    // 2. alive|stale → dead (heartbeat timeout exceeded)
     const deadRows = db.prepare(`
-      SELECT id, project_id, client_type, status, last_heartbeat, last_event_seen
-      FROM sessions
+      SELECT id, project_id FROM sessions
       WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > ?
     `).all(now, SESSION_DEAD_THRESHOLD_SECS) as any[];
 
-    const deadTransition = db.transaction(() => {
+    db.transaction(() => {
       for (const row of deadRows) {
-        // Generate handoff BEFORE marking session dead to ensure getSession() reads correct state
         const handoff = generateStructuredHandoff(row.project_id, row.id, 'ungraceful');
-        
         db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(row.id);
-        
         const event = appendEvent(row.project_id, row.id, 'SESSION_DISCONNECTED', {
-          session_id: row.id,
-          timestamp: now,
-          reason: 'heartbeat_timeout',
-          handoff
+          session_id: row.id, timestamp: now, reason: 'heartbeat_timeout', handoff
         });
-        
         updateLastEventSeen(row.id, event.id);
       }
-    });
-    deadTransition();
-    
-    // Invalidate caches after transaction commits
-    for (const row of deadRows) {
-      invalidateProjectCache(row.project_id);
-    }
+    })();
+    for (const row of deadRows) invalidateProjectCache(row.project_id);
 
     // 3. Periodic snapshot check
     if (now - lastSnapshotTime >= SNAPSHOT_CHECK_INTERVAL_SECS) {
       lastSnapshotTime = now;
       try {
-        const activeProjects = db.prepare('SELECT id FROM projects').all() as any[];
-        for (const project of activeProjects) {
-          // Triggers snapshot logic internally by calling materialized state builders
-          materializeProject(project.id, true);
-        }
+        const projects = db.prepare('SELECT id FROM projects').all() as any[];
+        for (const p of projects) materializeProject(p.id, true);
       } catch (e) {
-        console.error('Failed to execute scheduled 30-minute database snapshot checker:', e);
+        console.error('[Butler] Scheduled snapshot check failed:', e);
       }
     }
   }, checkIntervalMs);

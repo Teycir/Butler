@@ -58,3 +58,20 @@ Write-Host "🎉 Done! Restart your AI clients to activate Butler."
 Write-Host ""
 Write-Host "   Manual snippet:"
 Write-Host "   `"butler`": { `"command`": `"$NodeBin`", `"args`": [`"$Entry`"], `"env`": { `"BUTLER_DB_PATH`": `"$DbPath`" } }"
+Write-Host ""
+Write-Host "──────────────────────────────────────────────────────────────────"
+Write-Host "📋  SYSTEM PROMPT SNIPPET — paste this into your AI client once:"
+Write-Host "──────────────────────────────────────────────────────────────────"
+$Snippet = "On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = `"<client>-<4 random chars>`", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect."
+Write-Host ""
+Write-Host $Snippet
+Write-Host ""
+
+# Offer clipboard copy
+try {
+  Set-Clipboard -Value $Snippet
+  Write-Host "✅ Snippet copied to clipboard."
+} catch {
+  Write-Host "💡 Copy the snippet above manually."
+}
+Write-Host "──────────────────────────────────────────────────────────────────"
