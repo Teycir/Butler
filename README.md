@@ -4,7 +4,7 @@
 
 > **Persistent Coordination and Memory Layer for AI Coding Agents.**
 >
-> *“Simple like Git. Persistent like Notion. Collaborative like Figma. AI-Native like Cursor.”*
+> *"Simple like Git. Persistent like Notion. Collaborative like Figma. AI-Native like Cursor."*
 
 ---
 
@@ -13,6 +13,30 @@
 [![MCP Native](https://img.shields.io/badge/MCP-Native-blueviolet.svg)](#)
 [![No Cloud Required](https://img.shields.io/badge/No%20Cloud-100%25%20Local-green.svg)](#)
 [![Zero Config](https://img.shields.io/badge/Setup-Zero%20Config-brightgreen.svg)](#)
+
+---
+
+## 📑 Table of Contents
+
+- [Butler in 3 Minutes](#-butler-in-3-minutes)
+- [Quickstart](#-quickstart)
+- [System Architecture](#️-system-architecture)
+- [The Killer Demo](#-the-killer-demo-cross-client-session-continuity)
+- [Core Terminology](#-core-terminology)
+- [API & Tool Surface](#-api--tool-surface)
+  - [Resources](#resources)
+  - [Session Management](#session-management)
+  - [Task Management](#task-management)
+  - [Multi-Agent Coordination](#multi-agent-coordination)
+  - [Knowledge & Memory](#knowledge--memory)
+  - [Observability](#observability)
+- [Developer CLI](#️-developer-cli)
+- [Context Freshness & Staleness](#-context-freshness--staleness)
+- [Multi-Agent Conflict Detection](#-multi-agent-conflict-detection)
+- [Schema Migration](#️-schema-migration)
+- [Repository Anatomy](#-repository-anatomy)
+- [Principles](#-principles)
+- [Related Projects](#-related-projects)
 
 ---
 
@@ -142,41 +166,85 @@ To understand Butler in under two minutes, here are our core conceptual models:
 
 ---
 
-## 🏗️ Revised System Architecture
+## 🏗️ System Architecture
 
 Butler is designed to be operationally invisible and incredibly fast. It operates on an **event-sourced, materialized-view model** backed by SQLite in Write-Ahead Log (WAL) mode.
 
 ```mermaid
 graph TD
-    subgraph Clients
+    subgraph AI_Clients["AI Clients"]
         C1[🤖 Claude Desktop]
         C2[🤖 Cursor Editor]
+        C3[🤖 Kiro / Kilo / VSCode]
     end
 
-    subgraph Transport Layer
-        MCP[🔌 Model Context Protocol Server - stdio]
+    subgraph Dev_Tools["Developer Tools (local, no MCP)"]
+        CLI[🖥️ cli/status.ts<br/>npm run status]
+        DASH[📊 cli/dashboard.ts<br/>npm run dashboard → :7888 SSE]
     end
 
-    subgraph Butler Coordinator
-        DISP[⚙️ Dispatcher]
-        COOR[💓 Session Coordinator & Heartbeats]
-        EVSTORE[📝 Event Store / Append-Only Log]
-        CACHE[⚡ Incremental Materialization Cache]
-        VEC[🔍 Pure-JS TF-IDF Memory Engine]
+    subgraph MCP_Layer["Transport Layer"]
+        MCP[🔌 mcp/server.ts<br/>MCP stdio · JSON-RPC]
     end
 
-    subgraph Storage
-        DB[(🗄️ SQLite WAL)]
+    subgraph Tools["mcp/tools/"]
+        T_SES[session.tools.ts<br/>register · heartbeat · disconnect]
+        T_TODO[todo.tools.ts<br/>add · complete · update · delete · list]
+        T_KNOW[knowledge.tools.ts<br/>wiki · rule · decision · handoff]
+        T_MEM[memory.tools.ts<br/>store · search · delete · projectlist]
+        T_COORD[coordination.tools.ts<br/>claim · unclaim · message · broadcast]
+        T_OBS[observability.tools.ts<br/>eventsexport]
     end
 
-    C1 -->|JSON-RPC| MCP
-    C2 -->|JSON-RPC| MCP
-    MCP --> DISP
-    DISP --> COOR
-    DISP --> EVSTORE
-    EVSTORE -->|WAL Transaction| DB
-    DB -->|replay on read| CACHE
-    DB --> VEC
+    subgraph Resources["mcp/resources.ts"]
+        R_CTX[context · todos · wiki<br/>sessions · memories · diff]
+    end
+
+    subgraph Coordinator["src/coordinator/"]
+        LIFE[lifecycle.ts<br/>session CRUD · heartbeat monitor<br/>stale/dead detection · ensureSession]
+        HAND[handoff.ts<br/>generateStructuredHandoff<br/>computeHandoffQualityScore]
+        DIFF[diff.ts<br/>getProjectDiff<br/>getContextStaleness]
+    end
+
+    subgraph Events["src/events/"]
+        STORE[store.ts<br/>appendEvent · getEvents<br/>createSnapshot · getLatestSnapshot]
+        MAT[materializer.ts<br/>projectEvent · materializeProject<br/>in-memory ProjectState cache]
+    end
+
+    subgraph Vector["src/vector/"]
+        VEC[index.ts<br/>Pure-JS TF-IDF<br/>addMemory · searchMemories · deleteMemory]
+    end
+
+    subgraph DB_Layer["src/db/"]
+        SCHEMA[schema.ts<br/>INIT_SCHEMA_SQL<br/>VERSIONED_MIGRATIONS v1–v6]
+        DATABASE[database.ts<br/>initDatabase · getDb · closeDatabase]
+    end
+
+    subgraph Storage["SQLite WAL  .butler/butler.db"]
+        T1[(projects)]
+        T2[(sessions)]
+        T3[(events)]
+        T4[(sequences)]
+        T5[(snapshots)]
+        T6[(memories)]
+        T7[(butler_migrations)]
+    end
+
+    C1 & C2 & C3 -->|JSON-RPC stdio| MCP
+    MCP --> T_SES & T_TODO & T_KNOW & T_MEM & T_COORD & T_OBS
+    MCP --> R_CTX
+    T_SES & T_TODO & T_KNOW & T_MEM & T_COORD --> LIFE
+    T_SES --> HAND
+    T_KNOW --> HAND
+    R_CTX --> MAT & LIFE & DIFF & VEC
+    LIFE --> STORE & HAND & DIFF
+    STORE --> DATABASE
+    MAT --> STORE
+    VEC --> DATABASE
+    DATABASE --> SCHEMA
+    DATABASE --> T1 & T2 & T3 & T4 & T5 & T6 & T7
+    CLI --> DATABASE
+    DASH --> DATABASE
 ```
 
 ---
@@ -218,7 +286,17 @@ The installer builds Butler, deploys the release to `~/Mcp/butler-mcp/`, and aut
 
 > **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
 
-### 2. Run the Verification Suite
+### 2. Zero-Config Project Default
+
+Drop a `.butler/project.json` in your repo root to set a default project for all tool calls:
+
+```json
+{ "project_id": "my-project" }
+```
+
+Butler walks up the directory tree to find this file automatically. Once set, every tool call in that workspace resolves `project_id` without you passing it explicitly.
+
+### 3. Run the Verification Suite
 ```bash
 npm test
 ```
@@ -227,23 +305,126 @@ npm test
 
 ## 🔌 API & Tool Surface
 
-### 1. Resources
-*   `butler://projects/{projectId}/context`: Unified markdown context packet containing TODOs, rules, wiki pages, active sessions, and recent handoffs.
-*   `butler://projects/{projectId}/todos`: Materialized active task list.
-*   `butler://projects/{projectId}/wiki`: Shared wiki and reference documents.
-*   `butler://projects/{projectId}/sessions`: Active and stale session registry.
-*   `butler://projects/{projectId}/memories`: Complete universal project memory log.
+### Resources
 
-### 2. Core Tools
-*   `session.register`: Bind an active client session.
-*   `session.heartbeat`: Periodically signal presence (every 15s).
-*   `session.disconnect`: Gracefully disconnect and broadcast a structured continuity handoff.
-*   `todo.add` / `todo.complete`: Add and complete tasks with optimistic version locking.
-*   `wiki.update`: Create or update a wiki knowledge base page.
-*   `rule.add`: Add a persistent coding guideline all agents must follow.
-*   `decision.record`: Log an architectural decision record (ADR).
-*   `handoff.create`: Explicitly broadcast a session handoff with accomplishments and pending work.
-*   `memory.store` / `memory.search`: Store and search project memory using hybrid TF-IDF keyword ranking.
+| URI | Description |
+| :--- | :--- |
+| `butler://projects/{id}/context` | Unified markdown context packet: TODOs, rules, decisions, wiki, sessions, handoffs, messages, broadcasts, and auto-surfaced relevant memories. Includes a `🟢/🔴` freshness badge and staleness metadata. |
+| `butler://projects/{id}/todos` | Materialized active task list (JSON). |
+| `butler://projects/{id}/wiki` | Shared wiki and reference documents (JSON). |
+| `butler://projects/{id}/sessions` | Active and stale session registry (JSON). |
+| `butler://projects/{id}/memories` | Complete project memory log (JSON). |
+| `butler://projects/{id}/diff?since={eventId}` | Compact changelog of all state changes since a given event ID, grouped by type. |
+
+### Tools
+
+#### Session Management
+| Tool | Description |
+| :--- | :--- |
+| `sessionregister` | Bind an active client session. Idempotent — reconnecting agents reuse their session. |
+| `sessionheartbeat` | Signal presence every 15 seconds to stay alive in shared context. |
+| `sessiondisconnect` | Gracefully disconnect and broadcast a structured continuity handoff. |
+
+#### Task Management
+| Tool | Description |
+| :--- | :--- |
+| `todoadd` | Create a task with priority (`low`/`medium`/`high`) and optimistic version locking. |
+| `todocomplete` | Mark a task done with conflict detection against concurrent mutations. |
+| `todoupdate` | Update a TODO's title, priority, or status with version checking. |
+| `tododelete` | Delete a TODO with optimistic version checking. |
+| `todolist` | List all TODOs for a project (filterable by `pending`/`completed`/`all`). |
+
+#### Multi-Agent Coordination
+| Tool | Description |
+| :--- | :--- |
+| `todoclaim` | Claim a TODO as actively being worked. Other agents see it as 🔒 in-progress. Claims expire when the session goes stale. |
+| `todounclaim` | Release a claim, making the TODO available again. |
+| `messagesend` | Send a direct message to another active session (stored in event log; delivered on reconnect). |
+| `broadcast` | Announce something to all active sessions — visible in every agent's next context read under 📢 Broadcasts. |
+
+#### Knowledge & Memory
+| Tool | Description |
+| :--- | :--- |
+| `wikiupdate` | Create or update a wiki knowledge base page. |
+| `ruleadd` | Add a persistent coding guideline all agents must follow. |
+| `ruleremove` | Remove a persistent guideline by ID. |
+| `decisionrecord` | Log an architectural decision record (ADR) with context and outcome. |
+| `handoffcreate` | Explicitly broadcast a session handoff. Includes quality scoring (0–100%) with inline coaching feedback. |
+| `memorystore` | Store a semantic project memory (type: `summary`, `decision`, `rule`, `wiki`). |
+| `memorysearch` | Search project memory using hybrid TF-IDF keyword + recency ranking. |
+| `memorydelete` | Delete a memory by ID to remove stale or incorrect information. |
+| `projectlist` | List all projects in the Butler database. |
+
+#### Observability
+| Tool | Description |
+| :--- | :--- |
+| `eventsexport` | Export the raw event log as `json` (array) or `ndjson` (newline-delimited). Supports `since`, `until`, `session_id`, `event_type`, and `limit` filters. Default 500, max 5000 events. |
+
+---
+
+## 🖥️ Developer CLI
+
+Butler ships two local CLI commands — no MCP server required.
+
+### `npm run status`
+
+Reads `.butler/butler.db` directly and prints a live terminal summary:
+- Active sessions (alive / stale) with last heartbeat times
+- Open TODOs grouped by priority
+- Recent handoffs and their quality scores
+- Conflict log and broadcast history
+- Event log stats and snapshot info
+
+Supports `--project <id>`, `--db <path>`, `--json`, and `--help` flags. `--json` emits structured output for piping into `jq` or external tooling.
+
+### `npm run dashboard`
+
+Starts a local read-only web dashboard at `http://localhost:7888`:
+- Live SSE push every 5 seconds — zero page refresh
+- Session heartbeat status, open TODOs with priority and claim indicators
+- Broadcasts, conflict warnings, and a scrolling 30-event log
+- Purely observational — zero writes through the UI
+
+Supports `--port <n>`, `--host <addr>`, and `--db <path>` flags.
+
+---
+
+## 🔍 Context Freshness & Staleness
+
+Every `/context` read opens with a freshness badge:
+
+- `🟢` — at least one session is alive and actively heartbeating
+- `🔴` — no live sessions; context was last updated some time ago
+
+The raw JSON payload (second content block on `/context`) also includes a `staleness` object:
+
+```json
+{
+  "last_live_heartbeat": 1716900000,
+  "has_live_session": false,
+  "events_since_last_read": 12,
+  "context_age_seconds": 720
+}
+```
+
+Agents reconnecting after a gap can use `last_event_id` + the `/diff` resource to fetch only what changed, rather than re-reading the full context.
+
+---
+
+## 🤝 Multi-Agent Conflict Detection
+
+When two sessions complete or update the same TODO within a 10-second window, Butler appends a `TODO_CONFLICT` event alongside the mutation. These conflicts surface in the `/context` resource under **⚡ Recent Coordination Conflicts**, letting all agents see where parallel writes collided and coordinate resolution.
+
+---
+
+## 🗄️ Schema Migration
+
+Butler uses a versioned migration runner backed by a `butler_migrations` tracking table. Each migration:
+- Runs inside a transaction — failure rolls back cleanly
+- Is idempotent — applied exactly once, never re-run
+- Records version number, description, and `applied_at` timestamp
+
+The `VERSIONED_MIGRATIONS` array in `schema.ts` is the single source of truth. Pre-existing databases are automatically brought up to date on startup.
 
 ---
 
@@ -252,15 +433,30 @@ npm test
 ```text
 Butler/
 ├── src/
-│   ├── db/            # SQLite connection pool, WAL mode, schema initializations
-│   ├── events/        # Event store (append-only logs), materialized view, snapshots
-│   ├── coordinator/   # Heartbeat registry, session lifecycle monitor, handoffs
-│   ├── vector/        # Cosine similarity and pure-JS TF-IDF sparse memory indexer
-│   ├── mcp/           # Model Context Protocol stdio transport & tools wrapper
-│   └── index.ts       # Application entry point
+│   ├── db/            # SQLite connection pool, WAL mode, versioned schema migrations
+│   ├── events/        # Event store (append-only log), materializer, snapshots
+│   ├── coordinator/   # Heartbeat registry, session lifecycle, handoff quality scoring
+│   ├── vector/        # Pure-JS TF-IDF sparse memory indexer + cosine similarity
+│   ├── mcp/
+│   │   ├── server.ts                    # MCP stdio transport, routing, auto-registration
+│   │   ├── resources.ts                 # context, todos, wiki, sessions, memories, diff
+│   │   └── tools/
+│   │       ├── session.tools.ts         # sessionregister, sessionheartbeat, sessiondisconnect
+│   │       ├── todo.tools.ts            # todoadd, todocomplete, todoupdate, tododelete, todolist
+│   │       ├── knowledge.tools.ts       # wikiupdate, ruleadd, ruleremove, decisionrecord, handoffcreate
+│   │       ├── memory.tools.ts          # memorystore, memorysearch, memorydelete, projectlist
+│   │       ├── coordination.tools.ts    # todoclaim, todounclaim, messagesend, broadcast
+│   │       └── observability.tools.ts   # eventsexport
+│   ├── cli/
+│   │   ├── status.ts      # `npm run status` — terminal project summary
+│   │   └── dashboard.ts   # `npm run dashboard` — local SSE web dashboard
+│   ├── project-config.ts  # .butler/project.json discovery (walks up directory tree)
+│   ├── validation.ts
+│   └── index.ts           # Application entry point
 ├── tests/
 │   └── integration.test.ts
-├── docs/              # In-depth architectural & workflow details
+├── docs/              # Architecture, concepts, changelog, recovery guides
+├── install/           # install.sh / install.ps1 — build + multi-client auto-config
 ├── package.json
 └── tsconfig.json
 ```
@@ -269,9 +465,10 @@ Butler/
 
 ## 📜 Principles
 
-*   **Events are Truth, State is Cache:** We reconstruct project models deterministically by replaying event logs. 
+*   **Events are Truth, State is Cache:** We reconstruct project models deterministically by replaying event logs.
 *   **0-Clicks Portability:** Vector indexers run on pure JavaScript TF-IDF token matching, eliminating the need for Python packages, heavy vector databases, or paid API keys.
 *   **Invisible Ergonomics:** The user never manages memory. The system simply remembers.
+*   **Active Contribution, Not Passive Reading:** Butler's server instructions coach every agent to write decisions, TODOs, rules, and handoffs — not just consume them. The shared brain only works if everyone feeds it.
 
 ---
 
@@ -375,4 +572,3 @@ GitHub: [@Teycir](https://github.com/Teycir)
 **Built with 💚 by [Teycir Ben Soltane](https://teycirbensoltane.tn)**
 
 </div>
-
