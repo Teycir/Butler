@@ -1,3 +1,8 @@
+---
+name: butler-workflow
+description: Orchestrate Butler MCP for multi-agent coordination, persistent memory, and cross-session continuity.
+---
+
 # Butler Workflow
 
 Orchestrate Butler MCP for multi-agent coordination, persistent memory, and cross-session continuity.
