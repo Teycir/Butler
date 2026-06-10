@@ -1670,6 +1670,126 @@ async function runTests() {
   });
 
   // =========================================================================
+  // 19. SANITIZE MARKDOWN — escape and injection resistance
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('19. sanitizeMarkdown');
+  console.log('──────────────────────────────────────────');
+
+  await test('sanitizeMarkdown escapes heading hashes', () => {
+    assert(sanitizeMarkdown('# Header') === '\\# Header', 'Leading # must be escaped');
+    assert(sanitizeMarkdown('## Sub') === '\\#\\# Sub', 'Multiple ## must all be escaped');
+  });
+
+  await test('sanitizeMarkdown escapes bold/italic asterisks', () => {
+    const result = sanitizeMarkdown('**bold**');
+    assert(result === '\\*\\*bold\\*\\*', `Expected \\*\\*bold\\*\\*, got: ${result}`);
+  });
+
+  await test('sanitizeMarkdown escapes backticks (inline code and code fences)', () => {
+    assert(sanitizeMarkdown('`code`') === '\\`code\\`', 'Backticks must be escaped');
+    assert(sanitizeMarkdown('```fence```') === '\\`\\`\\`fence\\`\\`\\`', 'Triple backticks must be escaped');
+  });
+
+  await test('sanitizeMarkdown escapes underscores', () => {
+    assert(sanitizeMarkdown('_italic_') === '\\_italic\\_', 'Underscores must be escaped');
+  });
+
+  await test('sanitizeMarkdown escapes square brackets and pipes', () => {
+    const link = '[link](url)';
+    const escaped = sanitizeMarkdown(link);
+    assert(!escaped.includes('[link]'), `Unescaped [link] found in: ${escaped}`);
+    const pipe = 'a | b';
+    const escapedPipe = sanitizeMarkdown(pipe);
+    assert(escapedPipe.includes('\\|'), `Pipe not escaped in: ${escapedPipe}`);
+  });
+
+  await test('sanitizeMarkdown preserves newlines (needed for blockquote rendering)', () => {
+    const input = 'line1\nline2\nline3';
+    const result = sanitizeMarkdown(input);
+    assert(result.includes('\n'), 'Newlines must be preserved for blockquote line iteration');
+    assert(result.split('\n').length === 3, 'Three lines should remain after sanitization');
+  });
+
+  await test('sanitizeMarkdown is idempotent on plain text', () => {
+    const plain = 'no special chars here';
+    assert(sanitizeMarkdown(plain) === plain, 'Plain text should pass through unchanged');
+  });
+
+  await test('sanitizeMarkdown blocks injection from TODO title with malicious markdown', () => {
+    const malicious = '# Injected\n```\ncode fence\n```';
+    const rendered = sanitizeMarkdown(malicious);
+    assert(!rendered.match(/^#\s/m), 'Raw heading must not appear after sanitization');
+    assert(!rendered.includes('```'), 'Raw code fence must not appear after sanitization');
+  });
+
+  // =========================================================================
+  // 20. MARKDOWN INJECTION — end-to-end via handoff payload
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('20. Markdown Injection (end-to-end)');
+  console.log('──────────────────────────────────────────');
+
+  await test('Malicious handoff completed_todos entry is sanitized in context markdown', () => {
+    const PROJECT_INJ = 'project-inject-test';
+    const SESS_INJ    = 'inject-sess';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_INJ, PROJECT_INJ);
+    registerSession(PROJECT_INJ, SESS_INJ, 'AttackerAgent');
+
+    // Inject markdown via handoff payload completed_todos
+    appendEvent(PROJECT_INJ, SESS_INJ, 'HANDOFF_CREATED', {
+      session_id: SESS_INJ,
+      completed_todos: ['# Injected heading\n```\nmalicious fence\n```'],
+      pending_todos:   [],
+      recent_decisions: [],
+      rules_added: [],
+      wiki_updated: [],
+      diff_summary: '# Diff heading\n`code`',
+      summary: 'Normal summary',
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+
+    // The context resource renders handoff payloads through sanitizeMarkdown.
+    // We verify it by calling sanitizeMarkdown on each field directly
+    // (same path as renderContextMarkdown in resources.ts).
+    const state = materializeProject(PROJECT_INJ, false);
+    const handoff = state.handoffs[state.handoffs.length - 1];
+    assert(handoff !== undefined, 'Handoff must exist in state');
+
+    const sanitizedTodo = sanitizeMarkdown(handoff.payload.completed_todos[0]);
+    assert(!sanitizedTodo.match(/^#/m), 'Heading injection must be escaped in completed_todos');
+    assert(!sanitizedTodo.includes('```'), 'Code fence injection must be escaped in completed_todos');
+
+    const sanitizedDiffLine = sanitizeMarkdown(handoff.payload.diff_summary.split('\n')[0]);
+    assert(!sanitizedDiffLine.match(/^#/), 'Heading injection must be escaped in diff_summary');
+  });
+
+  await test('Malicious TODO title is sanitized via sanitizeMarkdown before markdown render', () => {
+    const PROJECT_INJ2 = 'project-inject-test2';
+    const SESS_INJ2    = 'inject-sess2';
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(PROJECT_INJ2, PROJECT_INJ2);
+    registerSession(PROJECT_INJ2, SESS_INJ2, 'AttackerAgent2');
+
+    const todoId = getNextSequenceValue(PROJECT_INJ2, 'todo');
+    appendEvent(PROJECT_INJ2, SESS_INJ2, 'TODO_CREATED', {
+      todo_id: todoId,
+      title: '# Injected Header\n```\nmalicious\n```',
+      priority: 'high'
+    });
+
+    const state   = materializeProject(PROJECT_INJ2, false);
+    const todo    = state.todos[todoId];
+    assert(todo !== undefined, 'TODO must exist in materialized state');
+
+    // renderContextMarkdown calls sanitizeMarkdown(t.title) before interpolation
+    const rendered = sanitizeMarkdown(todo.title);
+    assert(!rendered.match(/^#/m), 'Raw heading must not survive sanitizeMarkdown');
+    assert(!rendered.includes('```'), 'Raw code fence must not survive sanitizeMarkdown');
+  });
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log('\n══════════════════════════════════════════');

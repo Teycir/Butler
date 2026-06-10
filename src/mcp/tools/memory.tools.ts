@@ -33,6 +33,10 @@ export const memoryToolDefs = [
           minimum: 0,
           maximum: 1,
           description: 'Importance rating from 0.0 to 1.0'
+        },
+        session_id: {
+          type: 'string',
+          description: 'Session ID storing the memory (used for audit trail)'
         }
       },
       required: ['project_id', 'type', 'content']

@@ -85,7 +85,7 @@ Butler uses a single SQLite file located at `.butler/butler.db` inside your proj
 
 ### Performance Optimizations
 1.  **Write-Ahead Logging (WAL):** Enables multiple parallel readers to execute simultaneously while a write is occurring, preventing blocking bottlenecks.
-2.  **Synchronous NORMAL:** Offers a highly resilient write profile with minimal disk-flush latency.
+2.  **Synchronous FULL:** Ensures every committed transaction survives an OS crash by forcing a full fsync. Chosen because Butler is a shared memory layer where data loss is unacceptable.
 3.  **Performance Indexing:** Indexes on compound columns (e.g. `idx_events_project_session` on `(project_id, session_id)`) avoid $O(N)$ lookup scans.
 4.  **Database-Backed Sequences:** A dedicated `sequences` table handles safe, race-free incrementing IDs inside SQLite transactions, resolving race conditions from concurrent workers.
 

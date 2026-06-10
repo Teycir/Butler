@@ -253,13 +253,13 @@ function renderContextMarkdown(
       md += `> ${sanitizeMarkdown(h.summary).replace(/\n/g, '\n> ')}\n`;
       if (h.payload?.diff_summary && h.payload.diff_summary !== h.summary) {
         md += `\n**Changes this session:**\n`;
-        for (const line of h.payload.diff_summary.split('\n')) md += `> ${line}\n`;
+        for (const line of h.payload.diff_summary.split('\n')) md += `> ${sanitizeMarkdown(line)}\n`;
       }
-      if (h.payload?.completed_todos?.length > 0) md += `**Completed:** ${h.payload.completed_todos.join(', ')}\n`;
-      if (h.payload?.pending_todos?.length > 0) md += `**Pending:** ${h.payload.pending_todos.join(', ')}\n`;
-      if (h.payload?.recent_decisions?.length > 0) md += `**Decisions:** ${h.payload.recent_decisions.join(', ')}\n`;
-      if (h.payload?.rules_added?.length > 0) md += `**Rules Added:** ${h.payload.rules_added.join(', ')}\n`;
-      if (h.payload?.wiki_updated?.length > 0) md += `**Wiki Updated:** ${h.payload.wiki_updated.join(', ')}\n`;
+      if (h.payload?.completed_todos?.length > 0) md += `**Completed:** ${h.payload.completed_todos.map(sanitizeMarkdown).join(', ')}\n`;
+      if (h.payload?.pending_todos?.length > 0) md += `**Pending:** ${h.payload.pending_todos.map(sanitizeMarkdown).join(', ')}\n`;
+      if (h.payload?.recent_decisions?.length > 0) md += `**Decisions:** ${h.payload.recent_decisions.map(sanitizeMarkdown).join(', ')}\n`;
+      if (h.payload?.rules_added?.length > 0) md += `**Rules Added:** ${h.payload.rules_added.map(sanitizeMarkdown).join(', ')}\n`;
+      if (h.payload?.wiki_updated?.length > 0) md += `**Wiki Updated:** ${h.payload.wiki_updated.map(sanitizeMarkdown).join(', ')}\n`;
       md += `\n`;
     }
   }
