@@ -11,7 +11,7 @@
 
 import { getSessionEvents } from '../events/store.js';
 import { materializeProject } from '../events/materializer.js';
-import { getSession } from './lifecycle.js';
+import { getSession } from './session.js';
 import { now as getCurrentTimestamp } from '../constants.js';
 
 // ─── Handoff Generation ───────────────────────────────────────────────────────

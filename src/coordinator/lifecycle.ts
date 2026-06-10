@@ -19,23 +19,17 @@ import {
   now as getCurrentTimestamp
 } from '../constants.js';
 import { generateStructuredHandoff } from './handoff.js';
+import { getSession, updateLastEventSeen } from './session.js';
+import type { SessionRecord } from './session.js';
+
+// Re-export so existing callers importing from 'lifecycle' are unaffected
+export { getSession, updateLastEventSeen } from './session.js';
+export type { SessionRecord } from './session.js';
 
 // Re-export Phase 2 helpers so callers can import everything from 'lifecycle'
 export { generateStructuredHandoff, computeHandoffQualityScore } from './handoff.js';
 export { getProjectDiff, getContextStaleness } from './diff.js';
 export type { DiffEntry, ContextStalenessInfo } from './diff.js';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export interface SessionRecord {
-  id: string;
-  project_id: string;
-  client_type: string;
-  status: 'alive' | 'stale' | 'dead';
-  created_at: number;
-  last_heartbeat: number;
-  last_event_seen: number;
-}
 
 // ─── Session CRUD ─────────────────────────────────────────────────────────────
 
@@ -82,25 +76,6 @@ export function registerSession(
 
   registerTx();
   return getSession(sessionId)!;
-}
-
-export function getSession(sessionId: string): SessionRecord | null {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
-    FROM sessions WHERE id = ?
-  `).get(sessionId) as any;
-
-  if (!row) return null;
-  return {
-    id: row.id,
-    project_id: row.project_id,
-    client_type: row.client_type,
-    status: row.status as any,
-    created_at: Number(row.created_at),
-    last_heartbeat: Number(row.last_heartbeat),
-    last_event_seen: Number(row.last_event_seen)
-  };
 }
 
 export function getActiveSessions(projectId: string): SessionRecord[] {
@@ -172,10 +147,6 @@ export function validateSession(projectId: string, sessionId: string): void {
       `Session ${sessionId} is dead. Please register a new session.`
     );
   }
-}
-
-export function updateLastEventSeen(sessionId: string, eventId: number): void {
-  getDb().prepare(`UPDATE sessions SET last_event_seen = ? WHERE id = ?`).run(eventId, sessionId);
 }
 
 export function gracefulDisconnect(projectId: string, sessionId: string): void {

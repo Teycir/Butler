@@ -12,6 +12,7 @@ import { getContextStaleness, getProjectDiff, computeHandoffQualityScore } from 
 import { getMemories } from '../vector/index.js';
 import { searchMemories } from '../vector/index.js';
 import { sanitizeMarkdown } from '../validation.js';
+import { MEMORY_RELEVANCE_THRESHOLD } from '../constants.js';
 
 export const resourceDefs = [
   {
@@ -80,8 +81,6 @@ function parseResourceUri(uri: string) {
 
   return { projectId, resourceType, queryParams };
 }
-
-const MEMORY_RELEVANCE_THRESHOLD = 0.3;
 
 export async function handleReadResource(uri: string) {
   const { projectId, resourceType, queryParams } = parseResourceUri(uri);

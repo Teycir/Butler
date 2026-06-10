@@ -19,7 +19,7 @@ import { appendEvent } from '../../events/store.js';
 import { getDb } from '../../db/database.js';
 import { validateSession, updateLastEventSeen, getActiveSessions } from '../../coordinator/lifecycle.js';
 import { sanitizeInput } from '../../validation.js';
-import { now as getCurrentTimestamp } from '../../constants.js';
+import { now as getCurrentTimestamp, CONFLICT_WINDOW_SECS } from '../../constants.js';
 
 export const coordinationToolDefs = [
   {
@@ -245,8 +245,6 @@ export async function handleCoordinationTool(
  * If a conflict is detected, a TODO_CONFLICT event is appended alongside the
  * primary mutation event so that all sessions see the warning in context.
  */
-const CONFLICT_WINDOW_SECS = 10;
-
 export function detectAndRecordConflict(
   projectId: string,
   todoId: number,

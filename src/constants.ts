@@ -30,6 +30,17 @@ export const SNAPSHOT_SCHEMA_VERSION = 1;
 export const MEMORY_SEARCH_LIMIT = 500;
 export const HANDOFF_HISTORY_LIMIT = 50;
 
+// ProjectState history caps — prevent unbounded in-memory growth
+export const CONFLICT_HISTORY_LIMIT = 20;
+export const MESSAGE_HISTORY_LIMIT = 50;
+export const BROADCAST_HISTORY_LIMIT = 20;
+
+// Coordination thresholds
+export const CONFLICT_WINDOW_SECS = 10; // concurrent write window for conflict detection
+
+// Resource scoring thresholds
+export const MEMORY_RELEVANCE_THRESHOLD = 0.3; // minimum score to surface a memory in /context
+
 // Input validation limits
 export const MAX_INPUT_LENGTH = 10000;
 export const MAX_TITLE_LENGTH = 500;

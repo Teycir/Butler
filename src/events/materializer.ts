@@ -1,6 +1,12 @@
 import { EventRecord, HandoffPayload } from './types.js';
 import { getEvents, getLatestSnapshot, createSnapshot } from './store.js';
-import { SNAPSHOT_EVENT_INTERVAL, HANDOFF_HISTORY_LIMIT } from '../constants.js';
+import {
+  SNAPSHOT_EVENT_INTERVAL,
+  HANDOFF_HISTORY_LIMIT,
+  CONFLICT_HISTORY_LIMIT,
+  MESSAGE_HISTORY_LIMIT,
+  BROADCAST_HISTORY_LIMIT
+} from '../constants.js';
 
 export interface TodoItem {
   id: number;
@@ -255,7 +261,6 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     }
 
     case 'TODO_CONFLICT': {
-      const CONFLICT_HISTORY_LIMIT = 20;
       updatedState.conflicts.push({
         todo_id: Number(payload.todo_id),
         conflicting_session_id: payload.conflicting_session_id,
@@ -270,7 +275,6 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     }
 
     case 'MESSAGE_SENT': {
-      const MESSAGE_HISTORY_LIMIT = 50;
       updatedState.messages.push({
         from_session_id: payload.from_session_id,
         to_session_id: payload.to_session_id,
@@ -285,7 +289,6 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
     }
 
     case 'BROADCAST': {
-      const BROADCAST_HISTORY_LIMIT = 20;
       updatedState.broadcasts.push({
         from_session_id: payload.from_session_id,
         content: payload.content,
