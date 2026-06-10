@@ -31,6 +31,7 @@
   - [Knowledge & Memory](#knowledge--memory)
   - [Observability](#observability)
 - [Developer CLI](#️-developer-cli)
+- [Butler Workflow Skill](#-butler-workflow-skill)
 - [Context Freshness & Staleness](#-context-freshness--staleness)
 - [Multi-Agent Conflict Detection](#-multi-agent-conflict-detection)
 - [Schema Migration](#️-schema-migration)
@@ -389,6 +390,47 @@ Supports `--port <n>`, `--host <addr>`, and `--db <path>` flags.
 
 ---
 
+## 🧩 Butler Workflow Skill
+
+Butler includes a portable skill package that teaches AI agents how to use Butler's coordination features effectively. The skill is available in `skills/butler-workflow/`.
+
+### Installation
+
+**For Kiro CLI / Kilo Code / Claude Code:**
+```bash
+cp -r skills/butler-workflow ~/.kiro/skills/
+# or
+cp -r skills/butler-workflow ~/.agents/skills/
+```
+
+**For other agents:**
+Copy the skill to your agent's skill directory and it will be auto-loaded on startup.
+
+### What the Skill Teaches
+
+The `butler-workflow` skill provides comprehensive patterns for:
+
+- **Session Lifecycle:** Register → heartbeat → handoff → disconnect
+- **TODO Workflow:** Create → claim → work → complete with conflict prevention
+- **Memory Management:** Store decisions, search context, clean up stale data
+- **Multi-Agent Coordination:** Messages, broadcasts, conflict detection
+- **Best Practices:** When to register, how to handoff, what to persist
+
+### Usage
+
+Once installed, agents automatically learn Butler patterns. The skill teaches agents to:
+
+1. Register sessions at startup with unique session IDs
+2. Send heartbeats every 15-30 seconds during active work
+3. Claim TODOs before starting to prevent conflicts
+4. Store important decisions with appropriate importance scores
+5. Create quality handoffs when switching contexts
+6. Coordinate with other active sessions via messages
+
+See `skills/butler-workflow/SKILL.md` for full documentation and examples.
+
+---
+
 ## 🔍 Context Freshness & Staleness
 
 Every `/context` read opens with a freshness badge:
@@ -455,6 +497,8 @@ Butler/
 │   └── index.ts           # Application entry point
 ├── tests/
 │   └── integration.test.ts
+├── skills/            # Portable agent skill packages
+│   └── butler-workflow/   # Butler coordination patterns for AI agents
 ├── docs/              # Architecture, concepts, changelog, recovery guides
 ├── install/           # install.sh / install.ps1 — build + multi-client auto-config
 ├── package.json
