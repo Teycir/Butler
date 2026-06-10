@@ -13,6 +13,14 @@ export const SNAPSHOT_RETENTION_COUNT = 3;
  * On mismatch the snapshot is skipped and Butler replays from scratch or from
  * the prior clean snapshot.
  *
+ * Bump policy: increment when ProjectState fields are added, removed, or
+ * renamed in a way that makes old snapshots structurally incompatible.
+ * Old snapshots whose schema_version doesn't match are silently skipped
+ * in getLatestSnapshot() — Butler falls back to full event replay from the
+ * prior clean snapshot, or from the beginning if none exists.
+ * There is no automatic migration of snapshot data; the event log is always
+ * the source of truth.
+ *
  * History:
  *   1 — initial schema (todos, wiki, rules, decisions, handoffs, lastEventId)
  */

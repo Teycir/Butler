@@ -78,20 +78,17 @@ export function deleteMemory(projectId: string, memoryId: number): boolean {
   return result.changes > 0;
 }
 
-export function getMemories(projectId: string, limit?: number): MemoryRecord[] {
+export function getMemories(projectId: string, limit?: number, skipEmbedding = false): MemoryRecord[] {
   const db = getDb();
-  
+
+  const cols = skipEmbedding
+    ? 'id, project_id, type, content, source_ref, source_event_id, session_id, importance, created_at'
+    : 'id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at';
+
   const query = limit !== undefined
-    ? `SELECT id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at
-       FROM memories
-       WHERE project_id = ?
-       ORDER BY id DESC
-       LIMIT ${limit}`
-    : `SELECT id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at
-       FROM memories
-       WHERE project_id = ?
-       ORDER BY id DESC`;
-  
+    ? `SELECT ${cols} FROM memories WHERE project_id = ? ORDER BY id DESC LIMIT ${limit}`
+    : `SELECT ${cols} FROM memories WHERE project_id = ? ORDER BY id DESC`;
+
   const rows = db.prepare(query).all(projectId) as any[];
 
   return rows.map(r => ({
@@ -122,8 +119,10 @@ export function searchMemories(
   queryEmbedding?: Float32Array | number[],
   limit: number = 10
 ): SearchResult[] {
-  // Fetch recent memories to bound compute cost
-  const memories = getMemories(projectId, MEMORY_SEARCH_LIMIT);
+  // Fetch recent memories, skipping the embedding BLOB when no dense query
+  // vector is provided — avoids deserializing large BLOBs for TF-IDF-only searches.
+  const skipEmbedding = !queryEmbedding;
+  const memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, skipEmbedding);
   if (memories.length === 0) return [];
 
   const docs: SearchableDocument[] = memories.map(m => ({
