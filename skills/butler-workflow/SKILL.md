@@ -96,7 +96,7 @@ broadcast:
 ```
 
 **Check active sessions:**
-- Review butler://projects/{id}/coordination resource
+- Review butler://projects/{id}/sessions resource
 - See who's working on what
 - Avoid conflicting work
 
