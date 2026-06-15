@@ -33,6 +33,7 @@
   - [Observability](#observability)
 - [Developer CLI](#️-developer-cli)
 - [Butler Workflow Skill](#-butler-workflow-skill)
+- [Zero-Intervention Automation](#-zero-intervention-automation)
 - [Workflows, Best Practices & Troubleshooting](docs/workflows-best-practices.md)
 - [Context Freshness & Staleness](#-context-freshness--staleness)
 - [Multi-Agent Conflict Detection](#-multi-agent-conflict-detection)
@@ -463,6 +464,49 @@ Once installed, agents automatically learn Butler patterns. The skill teaches ag
 6. Coordinate with other active sessions via messages
 
 See `skills/butler-workflow/SKILL.md` for full documentation and examples.
+
+---
+
+## 🤖 Zero-Intervention Automation
+
+Butler is designed to operate completely in the background with **minimal to no human intervention**. By automating project discovery, session lifecycles, and context handoffs, you and your agents can focus entirely on development.
+
+### 1. Zero-Config Auto-Creation (`.butler/project.json`)
+To make onboarding effortless, Butler automatically handles project configuration:
+- **Automatic Setup**: If a connecting agent runs inside a workspace that does not contain a `.butler/project.json` file, Butler will automatically:
+  1. Create the `.butler/` directory.
+  2. Normalize the current working directory's folder name to generate a clean, kebab-case `project_id` (e.g. `some-cool-project`).
+  3. Write a default `project.json` containing that ID.
+- **Manual Override**: You can change or override the default ID at any time by editing the `"project_id"` field in `.butler/project.json`.
+- **Result**: Zero configuration or manual creation steps are required when opening new directories.
+
+### 2. Auto-Run via Agent Skills
+Deploy the `butler-workflow` skill package to your agent's skill directory:
+```bash
+# For Agy / Claude Code / Antigravity
+cp -r skills/butler-workflow ~/.agents/skills/
+
+# For OpenCode
+cp -r skills/butler-workflow ~/.config/opencode/skill/
+
+# For Kiro CLI / Kilo Code
+cp -r skills/butler-workflow ~/.kiro/skills/
+```
+- **Result**: Connecting agents load this skill on startup and execute the session lifecycle autonomously:
+  - Registers the session on startup.
+  - Starts a silent background timer emitting heartbeats every 15s.
+  - Automatically fetches context and reads tasks.
+  - Generates a structured handoff and disconnects gracefully on exit.
+
+### 3. Client System Instructions
+If using standard LLM clients (Claude Desktop, Cursor, VS Code, ChatGPT) without a skill loader, append this directive to your agent's global System Prompt instructions:
+> On startup, call `projectlist` or check `.butler/project.json` to find the active project. Call `sessionregister` (generate a unique `session_id`). Fetch `butler://projects/{id}/context` to catch up. Send heartbeats every 15 seconds. Before exit, run `handoffcreate` and call `sessiondisconnect`.
+
+### 4. Self-Healing Presence Sweeps
+If an agent crashes or the terminal is closed abruptly, Butler automatically self-heals:
+- The background lifecycle monitor sweeps active heartbeats every 15 seconds.
+- If a session misses heartbeats for 60 seconds, it is marked `stale`.
+- After 5 minutes, it is marked `dead`, its task claims/locks are automatically released for other sessions, and an ungraceful continuity handoff is synthesized to record what was left behind.
 
 ---
 
