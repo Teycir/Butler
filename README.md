@@ -33,6 +33,7 @@
   - [Observability](#observability)
 - [Developer CLI](#️-developer-cli)
 - [Butler Workflow Skill](#-butler-workflow-skill)
+- [Workflows, Best Practices & Troubleshooting](docs/workflows-best-practices.md)
 - [Context Freshness & Staleness](#-context-freshness--staleness)
 - [Multi-Agent Conflict Detection](#-multi-agent-conflict-detection)
 - [Schema Migration](#️-schema-migration)
@@ -553,7 +554,7 @@ Butler/
 │   └── integration.test.ts
 ├── skills/            # Portable agent skill packages
 │   └── butler-workflow/   # Butler coordination patterns for AI agents
-├── docs/              # Architecture, concepts, changelog, recovery guides
+├── docs/              # Workflows, best practices, troubleshooting, architecture, concepts, changelog, recovery guides
 ├── install/           # install.sh / install.ps1 — build + multi-client auto-config
 ├── package.json
 └── tsconfig.json
