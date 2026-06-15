@@ -85,11 +85,19 @@ export function getMemories(projectId: string, limit?: number, skipEmbedding = f
     ? 'id, project_id, type, content, source_ref, source_event_id, session_id, importance, created_at'
     : 'id, project_id, type, content, source_ref, source_event_id, session_id, embedding, importance, created_at';
 
-  const query = limit !== undefined
-    ? `SELECT ${cols} FROM memories WHERE project_id = ? ORDER BY id DESC LIMIT ${limit}`
-    : `SELECT ${cols} FROM memories WHERE project_id = ? ORDER BY id DESC`;
+  let query = `SELECT ${cols} FROM memories WHERE project_id = ? ORDER BY id DESC`;
+  const bindings: any[] = [projectId];
 
-  const rows = db.prepare(query).all(projectId) as any[];
+  if (limit !== undefined) {
+    const safeLimit = Math.floor(Number(limit));
+    if (!Number.isFinite(safeLimit) || safeLimit <= 0) {
+      throw new Error('Invalid limit');
+    }
+    query += ' LIMIT ?';
+    bindings.push(safeLimit);
+  }
+
+  const rows = db.prepare(query).all(...bindings) as any[];
 
   return rows.map(r => ({
     id: Number(r.id),
@@ -113,16 +121,23 @@ export interface SearchResult {
   score: number;
 }
 
+export interface SearchResultList extends Array<SearchResult> {
+  degraded?: boolean;
+  reason?: string;
+}
+
 export function searchMemories(
   projectId: string,
   query: string,
   queryEmbedding?: Float32Array | number[],
   limit: number = 10
-): SearchResult[] {
+): SearchResultList {
   // Fetch recent memories, skipping the embedding BLOB when no dense query
   // vector is provided — avoids deserializing large BLOBs for TF-IDF-only searches.
   const skipEmbedding = !queryEmbedding;
   let memories: MemoryRecord[] = [];
+  let degraded = false;
+  let reason: string | undefined;
   
   if (skipEmbedding) {
     const db = getDb();
@@ -135,26 +150,32 @@ export function searchMemories(
 
     if (keywords.length > 0) {
       const matchQuery = keywords.map(kw => `"${kw.replace(/"/g, '""')}"*`).join(' OR ');
-      const rows = db.prepare(`
-        SELECT m.id, m.project_id, m.type, m.content, m.source_ref, m.source_event_id, m.session_id, m.importance, m.created_at
-        FROM memories m
-        JOIN memories_fts f ON m.id = f.rowid
-        WHERE m.project_id = ? AND memories_fts MATCH ?
-        ORDER BY m.id DESC LIMIT ?
-      `).all(projectId, matchQuery, MEMORY_SEARCH_LIMIT) as any[];
+      try {
+        const rows = db.prepare(`
+          SELECT m.id, m.project_id, m.type, m.content, m.source_ref, m.source_event_id, m.session_id, m.importance, m.created_at
+          FROM memories m
+          JOIN memories_fts f ON m.id = f.rowid
+          WHERE m.project_id = ? AND memories_fts MATCH ?
+          ORDER BY m.id DESC LIMIT ?
+        `).all(projectId, matchQuery, MEMORY_SEARCH_LIMIT) as any[];
 
-      memories = rows.map(r => ({
-        id: Number(r.id),
-        project_id: r.project_id,
-        type: r.type as any,
-        content: r.content,
-        source_ref: r.source_ref ?? null,
-        source_event_id: r.source_event_id ? Number(r.source_event_id) : null,
-        session_id: r.session_id ?? null,
-        embedding: null,
-        importance: Number(r.importance),
-        created_at: Number(r.created_at)
-      }));
+        memories = rows.map(r => ({
+          id: Number(r.id),
+          project_id: r.project_id,
+          type: r.type as any,
+          content: r.content,
+          source_ref: r.source_ref ?? null,
+          source_event_id: r.source_event_id ? Number(r.source_event_id) : null,
+          session_id: r.session_id ?? null,
+          embedding: null,
+          importance: Number(r.importance),
+          created_at: Number(r.created_at)
+        }));
+      } catch (err) {
+        degraded = true;
+        reason = err instanceof Error ? err.message : String(err);
+        console.error(`FTS5 MATCH query failed: ${reason}`);
+      }
     }
 
     // If no keywords matched or query was too short, fallback to general getMemories
@@ -165,7 +186,14 @@ export function searchMemories(
     memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, false);
   }
 
-  if (memories.length === 0) return [];
+  if (memories.length === 0) {
+    const emptyResult: SearchResultList = [];
+    if (degraded) {
+      emptyResult.degraded = true;
+      emptyResult.reason = reason;
+    }
+    return emptyResult;
+  }
 
   const docs: SearchableDocument[] = memories.map(m => ({
     id: m.id,
@@ -243,5 +271,10 @@ export function searchMemories(
   });
 
   // Sort descending
-  return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  const sorted: SearchResultList = results.sort((a, b) => b.score - a.score).slice(0, limit);
+  if (degraded) {
+    sorted.degraded = true;
+    sorted.reason = reason;
+  }
+  return sorted;
 }

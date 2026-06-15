@@ -157,9 +157,16 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     }
   }
 
-  // Evict the oldest entry if the cache size exceeds 100 projects
+  // Evict the least recently used entry if the cache size exceeds 100 projects
   if (projectCache.size > 100) {
-    const oldestKey = projectCache.keys().next().value;
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [k, v] of projectCache.entries()) {
+      if (v.lastAccessed < oldestTime) {
+        oldestTime = v.lastAccessed;
+        oldestKey = k;
+      }
+    }
     if (oldestKey !== undefined) {
       projectCache.delete(oldestKey);
     }

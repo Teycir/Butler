@@ -137,10 +137,20 @@ export async function handleMemoryTool(
       );
 
       if (results.length === 0) {
-        return { content: [{ type: 'text', text: 'No matching memory logs found in local database.' }] };
+        let text = '';
+        if (results.degraded) {
+          text += `⚠️ *Warning: Advanced FTS search degraded due to syntax error ("${results.reason}"). Falling back to unranked matching.*\n\n`;
+        }
+        text += 'No matching memory logs found in local database.';
+        return { content: [{ type: 'text', text }] };
       }
 
-      let responseText = `### Semantic Search Results for "${args.query}"\n\n`;
+      let responseText = '';
+      if (results.degraded) {
+        responseText += `⚠️ *Warning: Advanced FTS search degraded due to syntax error ("${results.reason}"). Falling back to unranked matching.*\n\n`;
+      }
+      responseText += `### Semantic Search Results for "${args.query}"\n\n`;
+      
       for (const r of results) {
         responseText +=
           `**[ID ${r.memory.id}] ${r.memory.type.toUpperCase()} ` +

@@ -12,12 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(tests):** Add integration test for `eventsexport` to verify seamless since/until pagination.
 - **docs(readme):** Add documentation for LangGraph checkpointing and multi-agent orchestrator features.
 - **feat(cache):** Implement `lastAccessed` tracking and a 30-minute Time-To-Live (TTL) eviction policy in `projectCache` to prevent unbounded memory retention.
+- **feat(tests):** Add dedicated unit test suite for `projectEvent` pure projections in `tests/projections.test.ts`.
+- **feat(tests):** Add cross-platform `tests/run.ts` runner script to coordinate sequential test runs even if early phases fail.
 
 ### Fixed
 - **fix(sync):** Wrap `synccontext` claim transfer, timeline alignment, and broadcasts in a database transaction to ensure atomic operations.
 - **fix(sync):** Re-materialize and re-check target peer status inside the transaction to eliminate the claim transfer race condition with completed/deleted tasks.
 - **fix(store):** Add check for `db.inTransaction` to prevent nested transaction errors inside `getNextSequenceValue` under `better-sqlite3`.
 - **fix(sync):** Extract active peer heartbeat locking time limit to a named constant `PEER_ACTIVE_LOCK_SECONDS`.
+- **fix(vector):** Parameterize query limits inside `getMemories` to eliminate SQL injection surface.
+- **fix(vector):** Wrap FTS MATCH queries in a try-catch block inside `searchMemories` to handle malformed queries gracefully without throwing, returning `degraded` and `reason` metadata flags.
+- **fix(vector):** Warn users inside the `memorysearch` tool response when the query degraded due to an FTS syntax error.
+- **fix(cache):** Upgrade `projectCache` eviction logic from FIFO (Map entry insertion order) to a true Least Recently Used (LRU) policy using the `lastAccessed` timestamp.
+- **fix(lifecycle):** Pre-compute handoff payloads outside the transaction blocks in `gracefulDisconnect` and `startLifecycleMonitor` to eliminate potential deadlock risks.
+- **fix(mcp):** Append startup timestamps to `syntheticSessionId` to avoid collisions on OS PID recycling.
+- **fix(store):** Parameterize `SNAPSHOT_RETENTION_COUNT` inside the snapshot cleanup query instead of using string template interpolation.
+- **fix(tests):** Add integration test to verify FTS Match query failure degradation and error warning output.
 
 ### Changed & Refactored
 - **refactor(format):** Remove duplicate local formatting code in `context.ts` and `memory.tools.ts` by importing common formatting utilities (`formatAge`, `formatRecencyDays`, `formatTimestamp`) from `lib/format.ts`.

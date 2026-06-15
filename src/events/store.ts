@@ -127,9 +127,9 @@ export function createSnapshot(projectId: string, eventId: number, state: Record
       SELECT event_id FROM snapshots 
       WHERE project_id = ? 
       ORDER BY event_id DESC 
-      LIMIT ${SNAPSHOT_RETENTION_COUNT}
+      LIMIT ?
     )
-  `).run(projectId, projectId);
+  `).run(projectId, projectId, SNAPSHOT_RETENTION_COUNT);
 }
 
 export interface SnapshotRecord {

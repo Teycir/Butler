@@ -200,9 +200,9 @@ export class ButlerMcpServer {
       const projectId = getDefaultProjectId();
       if (!projectId) return; // No default project — skip auto-registration.
 
-      // Derive a stable synthetic session ID from the PID so restarts of the
-      // same client converge on the same session rather than flooding the table.
-      const syntheticSessionId = `auto-${process.pid}`;
+      // Derive a synthetic session ID from the PID and startup timestamp so that
+      // restarted client processes do not collide with recycled PIDs in handoff history.
+      const syntheticSessionId = `auto-${process.pid}-${Date.now()}`;
 
       try {
         const { wasAutoRegistered } = ensureSession(projectId, syntheticSessionId, 'auto');

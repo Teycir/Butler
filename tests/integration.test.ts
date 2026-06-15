@@ -396,6 +396,39 @@ async function runTests() {
     assert(Array.isArray(results), 'Expected an array');
   });
 
+  await test('memory.search handles FTS MATCH syntax errors gracefully by setting degraded flag', () => {
+    const db = getDb();
+    // Temporarily rename the fts table to trigger an FTS search failure
+    db.prepare('ALTER TABLE memories_fts RENAME TO memories_fts_temp').run();
+
+    try {
+      const results = searchMemories(PROJECT_ID, 'ESM rules');
+      assert(results.degraded === true, 'Search results should have degraded: true');
+      assert(typeof results.reason === 'string', 'degraded reason should be populated');
+      assert(results.length > 0, 'Fallback search should still return matches');
+    } finally {
+      // Restore the fts table
+      db.prepare('ALTER TABLE memories_fts_temp RENAME TO memories_fts').run();
+    }
+  });
+
+  await test('memory.search handles FTS MATCH syntax errors with empty results gracefully', () => {
+    const db = getDb();
+    const TEMP_PROJECT = 'non-existent-project-for-degraded-empty-test';
+    // Temporarily rename the fts table to trigger an FTS search failure
+    db.prepare('ALTER TABLE memories_fts RENAME TO memories_fts_temp').run();
+
+    try {
+      const results = searchMemories(TEMP_PROJECT, 'some keyword query');
+      assert(results.degraded === true, 'Search results should have degraded: true even when empty');
+      assert(typeof results.reason === 'string', 'degraded reason should be populated');
+      assert(results.length === 0, 'Should return empty results');
+    } finally {
+      // Restore the fts table
+      db.prepare('ALTER TABLE memories_fts_temp RENAME TO memories_fts').run();
+    }
+  });
+
   await test('deleteMemory removes only the targeted memory', () => {
     const memA = addMemory(PROJECT_ID, 'summary', 'Memory to delete', undefined, 0.5);
     const memB = addMemory(PROJECT_ID, 'summary', 'Memory to keep',   undefined, 0.5);
