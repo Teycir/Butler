@@ -1,7 +1,7 @@
 """
-Butler MCP — README Animation Generator
+Butler MCP — README Storyboard Animation Generator
 Run: python3 generate_banner.py
-Produces butler_banner.gif in the repo root.
+Produces butler_banner.gif in the public folder.
 """
 
 from PIL import Image, ImageDraw, ImageFont
@@ -9,9 +9,10 @@ import math, os, random
 
 W, H   = 720, 340
 FPS    = 30
-FRAMES = 90
+FRAMES = 120  # 4 seconds at 30fps
 OUT    = os.path.join(os.path.dirname(__file__), "butler_banner.gif")
 
+# Color Palette
 BG          = (10, 10, 18)
 CARD_DARK   = (22, 28, 50)
 CARD_MID    = (34, 42, 72)
@@ -20,13 +21,11 @@ GOLD        = (200, 170, 80)
 GOLD_DIM    = (120, 100, 45)
 WHITE       = (240, 240, 255)
 DIM         = (100, 105, 130)
-ACCENT_A    = (80, 160, 255)
-ACCENT_B    = (80, 220, 160)
-ACCENT_C    = (220, 120, 80)
+ACCENT_A    = (80, 160, 255)  # Cursor blue
+ACCENT_B    = (234, 114, 48)  # Claude orange
+ACCENT_C    = (80, 220, 160)  # Green
 GLOW_A      = (40, 80, 160)
-GLOW_B      = (40, 120, 80)
-GLOW_C      = (130, 60, 30)
-
+GLOW_B      = (130, 60, 30)
 
 def lerp(a, b, t): return a + (b - a) * t
 def ease_inout(t): return t * t * (3 - 2 * t)
@@ -48,41 +47,23 @@ def rounded_rect(draw, x, y, w, h, radius, fill, outline=None, width=1):
     draw.rounded_rectangle([x, y, x+w, y+h], radius=radius,
                             fill=fill, outline=outline, width=width)
 
-def draw_agent_window(draw, cx, cy, label, accent, glow_color, pulse):
-    ww, wh = 130, 78
-    x, y = cx - ww//2, cy - wh//2
-    glow_rect(draw, x, y, ww, wh, glow_color, radius=8, intensity=0.3+0.12*pulse)
-    rounded_rect(draw, x, y, ww, wh, 8, CARD_DARK, CARD_BORDER, 1)
-    rounded_rect(draw, x, y, ww, 22, 8, CARD_MID)
-    draw.rectangle([x, y+14, x+ww, y+22], fill=CARD_MID)
-    for i, col in enumerate([(220,80,80),(220,180,80),(80,200,100)]):
-        draw.ellipse([x+8+i*18, y+6, x+16+i*18, y+14], fill=col)
-    draw.text((x+ww//2, y+12), label, fill=accent, anchor="mm", font=MONO_SM)
-    for row, txt in enumerate(["$ butler connect", "  \u2713 session alive", "  > heartbeat \u2026"]):
-        col = blend(DIM, accent, 0.2+0.15*row)
-        draw.text((x+8, y+28+row*15), txt, fill=col, font=MONO_XS)
-    return x, y, ww, wh
+def load_font(size, bold=False):
+    candidates = [
+        f"/usr/share/fonts/truetype/dejavu/DejaVuSansMono{'-Bold' if bold else ''}.ttf",
+        f"/usr/share/fonts/truetype/liberation/LiberationMono{'-Bold' if bold else '-Regular'}.ttf",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return ImageFont.truetype(p, size)
+    return ImageFont.load_default()
 
-def draw_memory_card(draw, cx, cy, label, color):
-    cw, ch = 80, 52
-    x, y = cx - cw//2, cy - ch//2
-    shadow_col = (int(color[0]*0.15), int(color[1]*0.15), int(color[2]*0.15))
-    rounded_rect(draw, x+4, y+4, cw, ch, 6, shadow_col)
-    bg = blend(CARD_DARK, color, 0.15)
-    rounded_rect(draw, x, y, cw, ch, 6, bg, color, 1)
-    rounded_rect(draw, x, y, cw, 14, 6, blend(CARD_DARK, color, 0.35))
-    draw.rectangle([x, y+8, x+cw, y+14], fill=blend(CARD_DARK, color, 0.35))
-    draw.ellipse([x+6, y+4, x+14, y+12], fill=blend(color, WHITE, 0.5))
-    draw.text((x+cw//2, y+26), label, fill=blend(color, WHITE, 0.7),
-              anchor="mm", font=MONO_XS)
-    for i in range(2):
-        lw = int(cw*(0.5+0.2*(i%2)))
-        lx = x+(cw-lw)//2
-        draw.rectangle([lx, y+37+i*6, lx+lw, y+39+i*6],
-                        fill=blend(CARD_MID, color, 0.4))
+MONO_SM = load_font(10)
+MONO_XS = load_font(9)
+MONO_LG = load_font(18, bold=True)
+MONO_MD = load_font(12, bold=True)
 
-
-def draw_butler_figure(draw, bx, by, arm_angle):
+# Mascot butler drawing
+def draw_butler_figure(draw, bx, by, arm_angle, facing_left=True):
     suit = (30, 32, 48)
     draw.polygon([(bx-18,by+20),(bx+18,by+20),(bx+14,by+72),(bx-14,by+72)], fill=suit)
     draw.polygon([(bx-3,by+20),(bx,by+42),(bx-14,by+52),(bx-16,by+20)], fill=WHITE)
@@ -100,138 +81,227 @@ def draw_butler_figure(draw, bx, by, arm_angle):
     draw.rectangle([bx-16,by-28,bx+16,by+2], fill=hat)
     draw.rectangle([bx-22,by-2,bx+22,by+4], fill=hat)
     draw.rectangle([bx-16,by-10,bx+16,by-4], fill=GOLD_DIM)
-    draw.ellipse([bx+3,by+6,bx+13,by+16], outline=GOLD, width=1)
-    draw.line([(bx+13,by+16),(bx+16,by+20)], fill=GOLD, width=1)
-    ax, ay = bx+20, by+22
-    arm_len = 42
+    
+    # Monocle
+    if facing_left:
+        draw.ellipse([bx-13,by+6,bx-3,by+16], outline=GOLD, width=1)
+        draw.line([(bx-13,by+16),(bx-16,by+20)], fill=GOLD, width=1)
+    else:
+        draw.ellipse([bx+3,by+6,bx+13,by+16], outline=GOLD, width=1)
+        draw.line([(bx+13,by+16),(bx+16,by+20)], fill=GOLD, width=1)
+
+    # Arm and Tray
+    ax, ay = (bx-20, by+22) if facing_left else (bx+20, by+22)
+    arm_len = 38
     ex = int(ax + arm_len * math.cos(math.radians(arm_angle)))
     ey = int(ay + arm_len * math.sin(math.radians(arm_angle)))
     draw.line([(ax,ay),(ex,ey)], fill=suit, width=8)
     draw.ellipse([ex-7,ey-7,ex+7,ey+7], fill=WHITE)
-    tray_w = 52
+    
+    tray_w = 48
     tx = ex - tray_w//2
     ty = ey - 3
-    draw.rectangle([tx,ty,tx+tray_w,ty+6], fill=(180,175,160))
+    draw.rectangle([tx,ty,tx+tray_w,ty+5], fill=(180,175,160))
     draw.rectangle([tx+2,ty,tx+tray_w-2,ty+2], fill=(210,205,190))
     return ex, ey - 3
 
-def load_font(size, bold=False):
-    candidates = [
-        f"/usr/share/fonts/truetype/dejavu/DejaVuSansMono{'-Bold' if bold else ''}.ttf",
-        f"/usr/share/fonts/truetype/liberation/LiberationMono{'-Bold' if bold else '-Regular'}.ttf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return ImageFont.truetype(p, size)
-    return ImageFont.load_default()
+def draw_editor_window(draw, x, y, label, accent, glow_color, alpha, active_todos, completed_todos):
+    ww, wh = 160, 95
+    if alpha <= 0.01: return
+    glow_rect(draw, x, y, ww, wh, glow_color, radius=8, intensity=0.25*alpha)
+    
+    # Background and Border
+    bg_col = alpha_blend(BG, CARD_DARK, alpha)
+    border_col = alpha_blend(BG, CARD_BORDER, alpha)
+    rounded_rect(draw, x, y, ww, wh, 8, bg_col, border_col, 1)
+    
+    # Header bar
+    rounded_rect(draw, x, y, ww, 20, 8, alpha_blend(BG, CARD_MID, alpha))
+    draw.rectangle([x, y+12, x+ww, y+20], fill=alpha_blend(BG, CARD_MID, alpha))
+    for i, col in enumerate([(220,80,80),(220,180,80),(80,200,100)]):
+        col_fade = alpha_blend(BG, col, alpha)
+        draw.ellipse([x+8+i*14, y+6, x+14+i*14, y+12], fill=col_fade)
+    
+    draw.text((x+ww//2, y+10), label, fill=alpha_blend(BG, accent, alpha), anchor="mm", font=MONO_SM)
 
-MONO_SM = load_font(10)
-MONO_XS = load_font(9)
-MONO_LG = load_font(18, bold=True)
-MONO_MD = load_font(13)
+    # Content
+    for i, txt in enumerate(completed_todos):
+        col = alpha_blend(BG, (100, 200, 120), alpha)  # green
+        draw.text((x+10, y+26+i*14), f"[x] {txt}", fill=col, font=MONO_XS)
+        
+    for j, txt in enumerate(active_todos):
+        col = alpha_blend(BG, DIM, alpha)
+        draw.text((x+10, y+26+(len(completed_todos)+j)*14), f"[ ] {txt}", fill=col, font=MONO_XS)
 
+def draw_shared_db(draw, cx, cy):
+    # Cylindrical database stack representing Butler SQLite DB
+    w, h = 90, 80
+    x, y = cx - w//2, cy - h//2
+    glow_rect(draw, x, y, w, h, GOLD, radius=6, intensity=0.15)
+    
+    # Base cylinder rounds
+    for i in range(3):
+        dy = y + i*24
+        rounded_rect(draw, x, dy, w, 20, 6, CARD_DARK, GOLD_DIM, 1)
+        # Reflect highlights
+        rounded_rect(draw, x+2, dy+2, w-4, 6, 6, CARD_MID)
+        # Database lights
+        draw.ellipse([x+8, dy+7, x+13, dy+12], fill=ACCENT_C)
+        draw.text((x+w//2+4, dy+10), f"PART-{i+1}", fill=DIM, anchor="mm", font=MONO_XS)
 
-random.seed(42)
+def draw_handoff_card(draw, cx, cy, label, color, scale=1.0):
+    cw = int(72 * scale)
+    ch = int(44 * scale)
+    x, y = cx - cw//2, cy - ch//2
+    shadow_col = (int(color[0]*0.15), int(color[1]*0.15), int(color[2]*0.15))
+    rounded_rect(draw, x+3, y+3, cw, ch, 4, shadow_col)
+    bg = blend(CARD_DARK, color, 0.15)
+    rounded_rect(draw, x, y, cw, ch, 4, bg, color, 1)
+    rounded_rect(draw, x, y, cw, 10, 4, blend(CARD_DARK, color, 0.35))
+    draw.rectangle([x, y+6, x+cw, y+10], fill=blend(CARD_DARK, color, 0.35))
+    draw.text((x+cw//2, y+24), label, fill=blend(color, WHITE, 0.7), anchor="mm", font=MONO_XS)
 
-class Particle:
-    def __init__(self):
-        self.reset()
-    def reset(self):
-        self.x = random.uniform(50, W-50)
-        self.y = random.uniform(H*0.1, H*0.85)
-        self.life = random.uniform(0, 1)
-        self.speed = random.uniform(0.004, 0.012)
-        self.color = random.choice([ACCENT_A, ACCENT_B, ACCENT_C, GOLD])
-        self.size = random.choice([1,1,2])
-    def step(self):
-        self.life += self.speed
-        self.y -= 0.4
-        if self.life >= 1: self.reset()
-    def draw(self, draw):
-        a = math.sin(self.life * math.pi)
-        c = alpha_blend(BG, self.color, a * 0.5)
-        r = self.size
-        draw.ellipse([self.x-r, self.y-r, self.x+r, self.y+r], fill=c)
+def draw_brand(draw, t):
+    draw.text((W//2, 24), "Butler Coordination Flow", fill=GOLD, anchor="mm", font=MONO_LG)
+    
+    # Subtitle with active steps
+    step = "1. Active session completes tasks"
+    if 0.25 <= t < 0.5:
+        step = "2. Session disconnects -> Butler saves handoff"
+    elif 0.5 <= t < 0.75:
+        step = "3. Peer session registers -> Reads context"
+    elif t >= 0.75:
+        step = "4. Context rehydrated seamlessly!"
+        
+    draw.text((W//2, 48), step, fill=ACCENT_C, anchor="mm", font=MONO_MD)
 
-particles = [Particle() for _ in range(55)]
-
-AGENT_POSITIONS = [
-    (130, 130, "Session A", ACCENT_A, GLOW_A),
-    (360, 80,  "Session B", ACCENT_B, GLOW_B),
-    (590, 130, "Session C", ACCENT_C, GLOW_C),
-]
-CARD_OFFSETS = [0.0, 0.33, 0.66]
-CARD_TYPES   = ["memory", "todo", "rule"]
-
-def flying_card_pos(t, sx, sy, ex, ey):
-    mid_x = (sx+ex)/2
-    mid_y = min(sy,ey) - 70
-    bx = (1-t)**2*sx + 2*(1-t)*t*mid_x + t**2*ex
-    by = (1-t)**2*sy + 2*(1-t)*t*mid_y + t**2*ey
-    return int(bx), int(by)
-
+# Floor Grid Scroll
 def draw_floor(draw, scroll):
-    vp_x, vp_y = W//2, H//2+30
-    col = (30, 32, 52)
-    for i in range(14):
-        lx = int(lerp(0, W, i/13))
+    vp_x, vp_y = W//2, H//2+35
+    col = (25, 27, 42)
+    for i in range(16):
+        lx = int(lerp(0, W, i/15))
         draw.line([(lx,H),(vp_x,vp_y)], fill=col, width=1)
-    for i in range(10):
-        s = (i + scroll % 1) / 10
+    for i in range(8):
+        s = (i + scroll % 1) / 8
         y = int(lerp(vp_y, H, ease_out(s)))
         if y <= vp_y: continue
         xl = int(lerp(vp_x,0,s))
         xr = int(lerp(vp_x,W,s))
-        a = int(40*s)
-        draw.line([(xl,y),(xr,y)], fill=(a,a+2,a+12), width=1)
-
-def draw_brand(draw, t):
-    shimmer = 0.5 + 0.5*math.sin(t*2*math.pi*2)
-    title_col = blend(GOLD_DIM, GOLD, shimmer)
-    draw.text((W//2, 28), "Butler", fill=title_col, anchor="mm", font=MONO_LG)
-    draw.text((W//2, 48), "persistent multi-agent memory  \u00b7  mcp server",
-              fill=DIM, anchor="mm", font=MONO_SM)
-
-def draw_status(draw, frame):
-    dots = "\u25cf"*(1+(frame//12)%3) + "\u25cb"*(3-(1+(frame//12)%3))
-    txt = f"butler-mcp  \u00b7  {dots}  \u00b7  3 sessions alive  \u00b7  events: {frame*7+100}"
-    draw.text((W//2, H-12), txt, fill=blend(BG, DIM, 0.8), anchor="mm", font=MONO_XS)
+        a = int(35*s)
+        draw.line([(xl,y),(xr,y)], fill=(a,a+2,a+10), width=1)
 
 
 frames_out = []
-butler_x, butler_y = W//2 - 10, 155
+butler_x, butler_y = W//2, 140
 
 for f in range(FRAMES):
     t = f / FRAMES
     img  = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    draw_floor(draw, t*3)
+    draw_floor(draw, t*4)
+    draw.line([(50,56),(W-50,56)], fill=(32,34,50), width=1)
+    
+    # Draw Shared Database in Center
+    draw_shared_db(draw, W//2, 220)
+    
+    # Storyboard parameters based on time
+    # Phase 1: t in [0.0, 0.3] -> Cursor active, completing tasks
+    # Phase 2: t in [0.3, 0.45] -> Cursor disconnects, handoff created
+    # Phase 3: t in [0.45, 0.75] -> Claude registers, reads context
+    # Phase 4: t in [0.75, 1.0] -> Claude continues work
+    
+    # 1. Left Editor (Cursor) opacity
+    cursor_alpha = 1.0
+    if 0.3 <= t < 0.45:
+        cursor_alpha = lerp(1.0, 0.0, (t - 0.3) / 0.15)
+    elif t >= 0.45:
+        cursor_alpha = 0.0
+        
+    draw_editor_window(
+        draw, 40, 120, "Cursor (Session A)", ACCENT_A, GLOW_A, cursor_alpha,
+        active_todos=["Task 2", "Task 3"], completed_todos=["Task 1 (Done)"]
+    )
+    
+    # 2. Right Editor (Claude) opacity
+    claude_alpha = 0.0
+    if 0.45 <= t < 0.6:
+        claude_alpha = lerp(0.0, 1.0, (t - 0.45) / 0.15)
+    elif t >= 0.6:
+        claude_alpha = 1.0
+        
+    claude_completed = []
+    claude_active = ["Task 2", "Task 3"]
+    if t >= 0.75:
+        claude_completed = ["Task 1", "Task 2 (Working)"]
+        claude_active = ["Task 3"]
+        
+    draw_editor_window(
+        draw, W - 200, 120, "Claude (Session B)", ACCENT_B, GLOW_B, claude_alpha,
+        active_todos=claude_active, completed_todos=claude_completed
+    )
 
-    for p in particles:
-        p.step()
-        p.draw(draw)
+    # Butler Mascot movements
+    facing_left = True
+    arm_angle = 180  # Default reaching left
+    
+    if t < 0.3:
+        # Reaching left
+        arm_angle = 180 - 15 * math.sin(t * math.pi * 3)
+    elif 0.3 <= t < 0.45:
+        # Pulling back arm, rotating
+        turn_progress = (t - 0.3) / 0.15
+        arm_angle = lerp(180, 270, turn_progress)
+    elif 0.45 <= t < 0.75:
+        # Facing right, reaching out
+        facing_left = False
+        reach_progress = (t - 0.45) / 0.3
+        arm_angle = lerp(270, 0, reach_progress)
+    else:
+        # Steady right
+        facing_left = False
+        arm_angle = 0 + 5 * math.sin(t * math.pi * 4)
 
-    draw.line([(60,58),(W-60,58)], fill=(40,42,65), width=1)
+    # Draw Butler and get tray position
+    tray_x, tray_y = draw_butler_figure(draw, butler_x, butler_y, arm_angle, facing_left)
 
-    arm_angle = -30 + 12*math.sin(t*2*math.pi)
-    tray_cx, tray_ty = draw_butler_figure(draw, butler_x, butler_y, arm_angle)
-
-    for idx, (ax, ay, label, accent, glow) in enumerate(AGENT_POSITIONS):
-        pulse = 0.5 + 0.5*math.sin((t+idx*0.25)*2*math.pi)
-        draw_agent_window(draw, ax, ay, label, accent, glow, pulse)
-
-        card_t_raw = (t + CARD_OFFSETS[idx]) % 1.0
-        flight_t = (card_t_raw - 0.05) / 0.50
-        if 0.0 <= flight_t <= 1.0:
-            ease_ft = ease_inout(flight_t)
-            cx, cy = flying_card_pos(ease_ft, tray_cx, tray_ty, ax, ay+40)
-            draw_memory_card(draw, cx, cy, CARD_TYPES[idx], accent)
-
+    # Draw Flying Handoff Card
+    if 0.1 <= t < 0.35:
+        # Card floats from Cursor window to Butler's tray
+        card_t = (t - 0.1) / 0.25
+        cx = int(lerp(120, tray_x, ease_inout(card_t)))
+        cy = int(lerp(150, tray_y - 10, ease_inout(card_t)))
+        draw_handoff_card(draw, cx, cy, "EVENT_LOG", ACCENT_A, scale=1.0)
+    elif 0.35 <= t < 0.48:
+        # Handoff card goes down to database
+        card_t = (t - 0.35) / 0.13
+        cx = int(lerp(tray_x, W//2, ease_inout(card_t)))
+        cy = int(lerp(tray_y - 10, 200, ease_inout(card_t)))
+        draw_handoff_card(draw, cx, cy, "HANDOFF", GOLD, scale=0.8)
+    elif 0.48 <= t < 0.58:
+        # Handoff card goes up from database onto Butler's tray
+        card_t = (t - 0.48) / 0.10
+        cx = int(lerp(W//2, tray_x, ease_inout(card_t)))
+        cy = int(lerp(200, tray_y - 10, ease_inout(card_t)))
+        draw_handoff_card(draw, cx, cy, "CONTEXT", GOLD, scale=0.8)
+    elif 0.58 <= t < 0.75:
+        # Card floats from Butler's tray to Claude window
+        card_t = (t - 0.58) / 0.17
+        cx = int(lerp(tray_x, W - 120, ease_inout(card_t)))
+        cy = int(lerp(tray_y - 10, 150, ease_inout(card_t)))
+        draw_handoff_card(draw, cx, cy, "REHYDRATED", ACCENT_B, scale=1.0)
+        
     draw_brand(draw, t)
-    draw_status(draw, f)
+    
+    # Status bar
+    dots = "\u25cf" * (1 + (f // 15) % 3) + "\u25cb" * (3 - (1 + (f // 15) % 3))
+    status_text = f"butler-mcp  \u00b7  {dots}  \u00b7  db: butler.db (WAL)  \u00b7  status: synchronized"
+    draw.text((W//2, H-12), status_text, fill=DIM, anchor="mm", font=MONO_XS)
+
     frames_out.append(img)
 
+# Save the compiled GIF
 frames_out[0].save(
     OUT,
     save_all=True,
@@ -240,4 +310,4 @@ frames_out[0].save(
     duration=int(1000/FPS),
     optimize=False,
 )
-print(f"Saved {OUT}")
+print(f"Successfully generated visual explanatory storyboard: {OUT}")
