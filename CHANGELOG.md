@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-15
+
+### Added
+- **feat(mcp):** Richer, structured tool response messages on `sessionregister` (active peer status, open TODO count, unread broadcasts) and `todocomplete` (next unclaimed TODO list).
+- **feat(cli):** Zero-friction project bootstrap command (`butler init`) that interactively sets up `.butler/project.json` and updates `.gitignore`.
+- **feat(cli):** Complete system diagnostic diagnostics (`butler doctor`) verifying Node, build status, database schema, and MCP client configurations (Claude, Cursor, VS Code, etc.).
+- **feat(cli):** Diagnostics health-check (`butler ping` CLI command and `butlerping` MCP tool) to inspect database path, size, schema version, and project count.
+- **feat(cli):** Writable local web dashboard (`butler dashboard --dev`) permitting developers to complete, edit, or delete TODOs and broadcast messages directly from the UI.
+- **feat(coordination):** Context-rendered resolution hints on `TODO_CONFLICT` events to guide agents through reconciling concurrent completion and update writes.
+- **feat(lifecycle):** Suggested unique session ID generation logic for sessions registered with generic names to prevent namespace collisions.
+- **feat(package):** Added `butler-mcp` mapping in package binaries for direct `npx butler-mcp` client executions.
+
+### Fixed
+- **fix(cli):** Removed unused `STATUS_ICON` and `printDivider` declared-but-unused warnings in `status.ts`.
+- **fix(mcp):** Omit unused event variable destructuring in the `todocomplete` MCP tool handler.
+- **fix(coordination):** Include `conflicting_sessions` and `hint` in the typed event schema of `TODO_CONFLICT` in `types.ts`.
+
 ## [1.1.0] - 2026-06-15
 
 ### Added

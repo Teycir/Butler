@@ -1,18 +1,19 @@
 /**
  * cli/dashboard.ts — Phase 4.2
  *
- * Local read-only web dashboard served on http://localhost:7888
+ * Local web dashboard served on http://localhost:7888
  *
  * Shows live project state, session heartbeat activity, open TODOs,
  * recent events, and coordination signals (broadcasts, messages, conflicts).
  *
- * Purely observational — zero writes through the UI.
+ * Writable dev mode unlocked via --dev flag.
  * Auto-refreshes every 5 seconds via a lightweight SSE stream.
  *
  * Usage:
  *   npm run dashboard                   # serves localhost:7888
  *   npm run dashboard -- --port 8080
  *   npm run dashboard -- --db path/to/butler.db
+ *   npm run dashboard -- --dev          # unlocks write operations
  */
 
 import http from 'http';
@@ -21,24 +22,28 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { formatAge } from '../lib/format.js';
 import { now as getCurrentTimestamp } from '../constants.js';
+import { appendEvent } from '../events/store.js';
+import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
+import { initDatabase } from '../db/database.js';
 
 // ─── Arg parsing ──────────────────────────────────────────────────────────────
 
-function parseArgs(argv: string[]): { port: number; db?: string; host: string } {
-  const args = { port: 7888, host: '127.0.0.1', db: undefined as string | undefined };
+function parseArgs(argv: string[]): { port: number; db?: string; host: string; dev: boolean } {
+  const args = { port: 7888, host: '127.0.0.1', db: undefined as string | undefined, dev: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' || argv[i] === '-p') args.port = Number(argv[++i]);
     if (argv[i] === '--host') args.host = argv[++i];
     if (argv[i] === '--db') args.db = argv[++i];
+    if (argv[i] === '--dev') args.dev = true;
   }
   return args;
 }
 
-// ─── DB read helpers (identical pattern to status.ts — read-only) ─────────────
+// ─── DB read helpers ──────────────────────────────────────────────────────────
 
-function openDb(dbPath: string): Database.Database | null {
+function openDb(dbPath: string, isDev: boolean = false): Database.Database | null {
   if (!fs.existsSync(dbPath)) return null;
-  return new Database(dbPath, { readonly: true });
+  return new Database(dbPath, { readonly: !isDev });
 }
 
 function queryAll<T>(db: Database.Database, sql: string, ...params: any[]): T[] {
@@ -105,7 +110,7 @@ function buildDashboardData(db: Database.Database, nowTs: number) {
 
 // ─── HTML template ────────────────────────────────────────────────────────────
 
-function renderHtml(dbPath: string): string {
+function renderHtml(dbPath: string, isDev: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -121,6 +126,7 @@ function renderHtml(dbPath: string): string {
              display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
     header h1 { font-size: 16px; letter-spacing: 0.05em; }
     .badge { background: var(--accent); color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 11px; }
+    .badge.dev { background: var(--green); }
     .live { color: var(--green); font-size: 11px; }
     .db-path { color: var(--muted); font-size: 11px; flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     main { max-width: 1400px; margin: 0 auto; padding: 24px; }
@@ -129,7 +135,7 @@ function renderHtml(dbPath: string): string {
     .project-header h2 { font-size: 15px; color: var(--accent); }
     .stats { color: var(--muted); font-size: 11px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; position: relative; }
     .card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
     .session { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
     .session:last-child { border-bottom: none; }
@@ -139,13 +145,13 @@ function renderHtml(dbPath: string): string {
     .dot.dead  { background: var(--red); }
     .sess-id   { flex: 1; font-weight: 600; }
     .sess-meta { color: var(--muted); font-size: 11px; }
-    .todo { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+    .todo { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
     .todo:last-child { border-bottom: none; }
     .priority { font-size: 11px; width: 52px; flex-shrink: 0; }
     .priority.high   { color: var(--red); }
     .priority.medium { color: var(--yellow); }
     .priority.low    { color: var(--green); }
-    .todo-title { flex: 1; }
+    .todo-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .claim { color: var(--blue); font-size: 11px; }
     .event { display: flex; gap: 8px; padding: 4px 0; font-size: 11px; border-bottom: 1px solid var(--border); }
     .event:last-child { border-bottom: none; }
@@ -159,18 +165,32 @@ function renderHtml(dbPath: string): string {
     .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
     .no-projects { text-align: center; padding: 80px 0; color: var(--muted); }
     .no-projects h2 { margin-bottom: 8px; font-size: 18px; color: var(--text); }
+    
+    /* Writable UI elements */
+    .btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer; font-family: inherit; transition: all 0.2s ease; }
+    .btn-ok { color: var(--green); border-color: var(--green); }
+    .btn-ok:hover { background: var(--green); color: #fff; }
+    .btn-edit { color: var(--blue); border-color: var(--blue); }
+    .btn-edit:hover { background: var(--blue); color: #fff; }
+    .btn-delete { color: var(--red); border-color: var(--red); }
+    .btn-delete:hover { background: var(--red); color: #fff; }
+    
+    .input-text { background: #0f1117; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 11px; }
+    .btn-submit { background: var(--accent); color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; transition: background 0.2s; }
+    .btn-submit:hover { background: #5154e6; }
   </style>
 </head>
 <body>
 <header>
   <h1>🤵 Butler Dashboard</h1>
-  <span class="badge">read-only</span>
+  <span class="badge ${isDev ? 'dev' : ''}">${isDev ? 'dev-writable' : 'read-only'}</span>
   <span class="live" id="live">● live</span>
   <span class="db-path">${dbPath}</span>
 </header>
 <main id="main"><p class="no-projects"><h2>Loading…</h2></p></main>
 
 <script>
+const DEV_MODE = ${isDev ? 'true' : 'false'};
 const NOW_OFFSET = Date.now();
 function age(unixSecs) {
   const secs = Math.floor(Date.now()/1000) - unixSecs;
@@ -204,6 +224,53 @@ function eventSummary(ev) {
   }
 }
 
+function completeTodo(projectId, todoId) {
+  if (!confirm('Mark TODO #' + todoId + ' as completed?')) return;
+  fetch('/api/projects/' + projectId + '/todos/' + todoId + '/complete', { method: 'POST' })
+    .then(r => r.json())
+    .then(res => { if (res.error) alert(res.message); });
+}
+
+function deleteTodo(projectId, todoId) {
+  if (!confirm('Delete TODO #' + todoId + '? This cannot be undone.')) return;
+  fetch('/api/projects/' + projectId + '/todos/' + todoId, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(res => { if (res.error) alert(res.message); });
+}
+
+function editTodo(projectId, todoId, currentTitle) {
+  const newTitle = prompt('Edit TODO #' + todoId + ' title:', currentTitle);
+  if (newTitle === null) return;
+  if (!newTitle.trim()) { alert('Title cannot be empty'); return; }
+  fetch('/api/projects/' + projectId + '/todos/' + todoId, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: newTitle })
+  })
+    .then(r => r.json())
+    .then(res => { if (res.error) alert(res.message); });
+}
+
+function postBroadcast(event, projectId) {
+  event.preventDefault();
+  const form = event.target;
+  const input = form.elements.content;
+  const content = input.value;
+  fetch('/api/projects/' + projectId + '/broadcast', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: content })
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.error) {
+        alert(res.message);
+      } else {
+        form.reset();
+      }
+    });
+}
+
 function renderProject(proj) {
   const pending = proj.todos.pending;
   const sessHtml = proj.sessions.length === 0
@@ -218,12 +285,21 @@ function renderProject(proj) {
   const todoHtml = pending.length === 0
     ? '<div class="empty">No open TODOs</div>'
     : pending.sort((a,b) => ({high:0,medium:1,low:2}[a.priority]??1) - ({high:0,medium:1,low:2}[b.priority]??1))
-        .slice(0, 15).map(t => \`
-        <div class="todo">
-          <span class="priority \${esc(t.priority)}">\${esc(t.priority)}</span>
-          <span class="todo-title">[#\${t.id}] \${esc(trunc(t.title,55))}</span>
-          \${t.claimed_by ? \`<span class="claim">→ \${esc(t.claimed_by)}</span>\` : ''}
-        </div>\`).join('');
+        .slice(0, 15).map(t => {
+          const devButtons = DEV_MODE ? \`
+            <div style="display:inline-flex; gap:6px; margin-left:8px;">
+              <button class="btn btn-ok" title="Complete TODO" onclick="completeTodo('\${proj.id}', \${t.id})">✓</button>
+              <button class="btn btn-edit" title="Edit TODO Title" onclick="editTodo('\${proj.id}', \${t.id}, '\${esc(t.title)}')">✎</button>
+              <button class="btn btn-delete" title="Delete TODO" onclick="deleteTodo('\${proj.id}', \${t.id})">✗</button>
+            </div>\` : '';
+          return \`
+            <div class="todo">
+              <span class="priority \${esc(t.priority)}">\${esc(t.priority)}</span>
+              <span class="todo-title">[#\${t.id}] \${esc(trunc(t.title,45))}</span>
+              \${t.claimed_by ? \`<span class="claim">→ \${esc(t.claimed_by)}</span>\` : ''}
+              \${devButtons}
+            </div>\`;
+        }).join('');
 
   const bcHtml = proj.broadcasts.length === 0
     ? '<div class="empty">No recent broadcasts</div>'
@@ -233,6 +309,12 @@ function renderProject(proj) {
           <span style="color:var(--accent)"> [\${esc(b.from_session_id)}]</span>
           \${esc(trunc(b.content, 80))}
         </div>\`).join('');
+
+  const devBroadcastForm = DEV_MODE ? \`
+    <form onsubmit="postBroadcast(event, '\${proj.id}')" style="margin-top:12px; display:flex; gap:8px;">
+      <input type="text" placeholder="Post broadcast..." name="content" required class="input-text" style="flex:1;">
+      <button type="submit" class="btn-submit">Post</button>
+    </form>\` : '';
 
   const confHtml = proj.conflicts.length === 0
     ? '<div class="empty">No recent conflicts</div>'
@@ -264,7 +346,7 @@ function renderProject(proj) {
       <div class="grid">
         <div class="card"><h3>Sessions</h3>\${sessHtml}</div>
         <div class="card"><h3>Open TODOs</h3>\${todoHtml}</div>
-        <div class="card"><h3>Broadcasts</h3>\${bcHtml}</div>
+        <div class="card"><h3>Broadcasts</h3>\${bcHtml}\${devBroadcastForm}</div>
         <div class="card"><h3>Conflicts</h3>\${confHtml}</div>
         <div class="card" style="grid-column:1/-1"><h3>Event Log (last 30)</h3>\${evHtml}</div>
       </div>
@@ -305,10 +387,197 @@ function pushToClients(data: string) {
   }
 }
 
-function createServer(dbPath: string): http.Server {
-  const html = renderHtml(dbPath);
+function createServer(dbPath: string, isDev: boolean): http.Server {
+  const html = renderHtml(dbPath, isDev);
 
   return http.createServer((req, res) => {
+    // ── POST /api/projects/:projectId/todos/:todoId/complete ────────────────
+    const completeMatch = req.url?.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)\/complete$/);
+    if (req.method === 'POST' && completeMatch) {
+      if (!isDev) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
+        return;
+      }
+      const [, projectId, todoIdStr] = completeMatch;
+      const todoId = Number(todoIdStr);
+      try {
+        const db = openDb(dbPath, true);
+        if (!db) throw new Error('database not found');
+        
+        db.transaction(() => {
+          const state = materializeProject(projectId, false);
+          const todo = state.todos[todoId];
+          if (!todo) throw new Error(`TODO ID ${todoId} not found`);
+          if (todo.status === 'completed') throw new Error(`TODO ID ${todoId} already completed`);
+          
+          appendEvent(projectId, 'dashboard', 'TODO_COMPLETED', { todo_id: todoId, version: todo.version });
+        })();
+        
+        invalidateProjectCache(projectId);
+        db.close();
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        
+        // Push update to clients
+        const freshDb = openDb(dbPath, false);
+        if (freshDb) {
+          const freshData = buildDashboardData(freshDb, getCurrentTimestamp());
+          freshDb.close();
+          pushToClients(JSON.stringify(freshData));
+        }
+      } catch (e: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad_request', message: e.message }));
+      }
+      return;
+    }
+
+    // ── DELETE /api/projects/:projectId/todos/:todoId ──────────────────────
+    const deleteMatch = req.url?.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)$/);
+    if (req.method === 'DELETE' && deleteMatch) {
+      if (!isDev) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
+        return;
+      }
+      const [, projectId, todoIdStr] = deleteMatch;
+      const todoId = Number(todoIdStr);
+      try {
+        const db = openDb(dbPath, true);
+        if (!db) throw new Error('database not found');
+        
+        db.transaction(() => {
+          const state = materializeProject(projectId, false);
+          const todo = state.todos[todoId];
+          if (!todo) throw new Error(`TODO ID ${todoId} not found`);
+          
+          appendEvent(projectId, 'dashboard', 'TODO_DELETED', { todo_id: todoId });
+        })();
+        
+        invalidateProjectCache(projectId);
+        db.close();
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        
+        // Push update to clients
+        const freshDb = openDb(dbPath, false);
+        if (freshDb) {
+          const freshData = buildDashboardData(freshDb, getCurrentTimestamp());
+          freshDb.close();
+          pushToClients(JSON.stringify(freshData));
+        }
+      } catch (e: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad_request', message: e.message }));
+      }
+      return;
+    }
+
+    // ── PATCH /api/projects/:projectId/todos/:todoId ───────────────────────
+    if (req.method === 'PATCH' && deleteMatch) {
+      if (!isDev) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
+        return;
+      }
+      const [, projectId, todoIdStr] = deleteMatch;
+      const todoId = Number(todoIdStr);
+      
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body);
+          const title = payload.title;
+          if (!title || typeof title !== 'string' || title.trim() === '') {
+            throw new Error('Title is required');
+          }
+          
+          const db = openDb(dbPath, true);
+          if (!db) throw new Error('database not found');
+          
+          db.transaction(() => {
+            const state = materializeProject(projectId, false);
+            const todo = state.todos[todoId];
+            if (!todo) throw new Error(`TODO ID ${todoId} not found`);
+            
+            appendEvent(projectId, 'dashboard', 'TODO_UPDATED', { todo_id: todoId, title: title.trim() });
+          })();
+          
+          invalidateProjectCache(projectId);
+          db.close();
+          
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+          
+          // Push update to clients
+          const freshDb = openDb(dbPath, false);
+          if (freshDb) {
+            const freshData = buildDashboardData(freshDb, getCurrentTimestamp());
+            freshDb.close();
+            pushToClients(JSON.stringify(freshData));
+          }
+        } catch (e: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad_request', message: e.message }));
+        }
+      });
+      return;
+    }
+
+    // ── POST /api/projects/:projectId/broadcast ────────────────────────────
+    const broadcastMatch = req.url?.match(/^\/api\/projects\/([^/]+)\/broadcast$/);
+    if (req.method === 'POST' && broadcastMatch) {
+      if (!isDev) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
+        return;
+      }
+      const [, projectId] = broadcastMatch;
+      
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body);
+          const content = payload.content;
+          if (!content || typeof content !== 'string' || content.trim() === '') {
+            throw new Error('Broadcast content is required');
+          }
+          
+          const db = openDb(dbPath, true);
+          if (!db) throw new Error('database not found');
+          
+          appendEvent(projectId, 'dashboard', 'BROADCAST', {
+            from_session_id: 'dashboard',
+            content: content.trim(),
+            sent_at: getCurrentTimestamp()
+          });
+          
+          invalidateProjectCache(projectId);
+          db.close();
+          
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+          
+          // Push update to clients
+          const freshDb = openDb(dbPath, false);
+          if (freshDb) {
+            const freshData = buildDashboardData(freshDb, getCurrentTimestamp());
+            freshDb.close();
+            pushToClients(JSON.stringify(freshData));
+          }
+        } catch (e: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'bad_request', message: e.message }));
+        }
+      });
+      return;
+    }
+
     // ── GET /events — SSE stream ────────────────────────────────────────────
     if (req.url === '/events') {
       res.writeHead(200, {
@@ -321,7 +590,7 @@ function createServer(dbPath: string): http.Server {
       req.on('close', () => sseClients.delete(res));
 
       // Send current data immediately on connect
-      const db = openDb(dbPath);
+      const db = openDb(dbPath, false);
       if (db) {
         const data = buildDashboardData(db, getCurrentTimestamp());
         db.close();
@@ -332,7 +601,7 @@ function createServer(dbPath: string): http.Server {
 
     // ── GET /api/data — JSON snapshot ───────────────────────────────────────
     if (req.url === '/api/data') {
-      const db = openDb(dbPath);
+      const db = openDb(dbPath, false);
       if (!db) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'database not found' }));
@@ -359,10 +628,10 @@ function createServer(dbPath: string): http.Server {
 
 // ─── Polling loop — push updates to SSE clients every 5s ─────────────────────
 
-function startPolling(dbPath: string, intervalMs = 5000) {
+function startPolling(dbPath: string, isDev: boolean, intervalMs = 5000) {
   setInterval(() => {
     if (sseClients.size === 0) return;
-    const db = openDb(dbPath);
+    const db = openDb(dbPath, isDev);
     if (!db) return;
     const data = buildDashboardData(db, getCurrentTimestamp());
     db.close();
@@ -379,18 +648,23 @@ function main() {
     ? path.resolve(process.cwd(), args.db)
     : path.join(process.cwd(), '.butler', 'butler.db');
 
-  if (!fs.existsSync(dbPath)) {
+  if (!fs.existsSync(dbPath) && !args.dev) {
     console.warn(`⚠️  Database not found: ${dbPath}`);
     console.warn(`   Dashboard will start but show "No projects" until the DB is created.`);
   }
 
-  const server = createServer(dbPath);
-  startPolling(dbPath);
+  if (args.dev) {
+    initDatabase(dbPath);
+  }
+
+  const server = createServer(dbPath, args.dev);
+  startPolling(dbPath, args.dev);
 
   server.listen(args.port, args.host, () => {
     console.log(`\n🤵  Butler Dashboard`);
     console.log(`    URL:      http://${args.host}:${args.port}`);
     console.log(`    Database: ${dbPath}`);
+    console.log(`    Mode:     ${args.dev ? 'dev-writable' : 'read-only'}`);
     console.log(`    Updates:  every 5s via SSE\n`);
     console.log(`    Press Ctrl+C to stop.\n`);
   });

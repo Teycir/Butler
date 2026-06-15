@@ -102,13 +102,23 @@ export function processHeartbeat(projectId: string, sessionId: string): void {
   if (!sess) {
     throw new McpError(
       ErrorCode.InvalidRequest,
-      `Session ${sessionId} is not registered in project ${projectId}. Please call sessionregister first.`
+      JSON.stringify({
+        error: 'session_not_found',
+        message: `Session ${sessionId} is not registered in project ${projectId}.`,
+        hint: 'Call sessionregister first, or check session_id spelling.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
   if (sess.project_id !== projectId) {
     throw new McpError(
       ErrorCode.InvalidRequest,
-      `Session ${sessionId} is registered in project ${sess.project_id}, but request is for project ${projectId}.`
+      JSON.stringify({
+        error: 'session_project_mismatch',
+        message: `Session ${sessionId} is registered in project ${sess.project_id}, but request is for project ${projectId}.`,
+        hint: 'Check that project_id is correct, or register session under this project.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
   getDb().prepare(`UPDATE sessions SET status = 'alive', last_heartbeat = ? WHERE id = ?`)
@@ -132,19 +142,34 @@ export function validateSession(projectId: string, sessionId: string): void {
   if (!sess) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Session ${sessionId} is not registered. Please call sessionregister first.`
+      JSON.stringify({
+        error: 'session_not_found',
+        message: `Session '${sessionId}' is not registered in project '${projectId}'.`,
+        hint: 'Call sessionregister first, or check session_id spelling.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
   if (sess.project_id !== projectId) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Session ${sessionId} is registered under project ${sess.project_id}, but request is for project ${projectId}.`
+      JSON.stringify({
+        error: 'session_project_mismatch',
+        message: `Session '${sessionId}' is registered under project '${sess.project_id}', but request is for project '${projectId}'.`,
+        hint: 'Check that project_id is correct, or register session under this project.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
   if (sess.status === 'dead') {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Session ${sessionId} is dead. Please register a new session.`
+      JSON.stringify({
+        error: 'session_dead',
+        message: `Session '${sessionId}' is dead.`,
+        hint: 'Please register a new session.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
 }

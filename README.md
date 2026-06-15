@@ -68,7 +68,19 @@ Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process e
 
 ---
 
-## ⏱️ Quickstart in 60 Seconds
+## ⏱️ Quickstart in 30 Seconds (via npx)
+
+The fastest way to install and configure Butler is via `npx`:
+
+```bash
+npx butler-mcp install   # Auto-configures all clients (Claude, Cursor, VS Code, Kiro CLI, Kilo Code)
+npx butler-mcp status    # Runs the visual status CLI
+npx butler-mcp dashboard # Runs the web dashboard
+```
+
+---
+
+## ⏱️ Quickstart from Source
 
 ### 1. Clone:
 ```bash
@@ -290,6 +302,24 @@ bash install/install.sh
 The installer builds Butler, deploys the release to `~/Mcp/butler-mcp/`, and auto-configures Claude Desktop, Kiro CLI, Kilo Code, VS Code, and Cursor. Restart your AI clients and Butler is ready.
 
 > **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
+
+#### Verify Installation
+
+Open your AI client (Claude Desktop, Cursor, etc.) and ask:
+
+> "Can you call the `butlerping` tool?"
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "db_path": "/home/user/.butler/butler.db",
+  "db_size_kb": 142,
+  "schema_version": 8,
+  "project_count": 3,
+  "uptime_seconds": 3621
+}
+```
 
 ### 2. Zero-Config Project Default
 

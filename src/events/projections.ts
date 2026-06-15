@@ -178,7 +178,9 @@ export function projectEvent(state: ProjectState, event: EventRecord): ProjectSt
         conflicting_session_id: payload.conflicting_session_id,
         conflict_type: payload.conflict_type,
         detected_at: event.created_at,
-        detected_by_session: event.session_id
+        detected_by_session: event.session_id,
+        conflicting_sessions: payload.conflicting_sessions,
+        hint: payload.hint
       });
       if (updatedState.conflicts.length > CONFLICT_HISTORY_LIMIT) {
         updatedState.conflicts = updatedState.conflicts.slice(-CONFLICT_HISTORY_LIMIT);

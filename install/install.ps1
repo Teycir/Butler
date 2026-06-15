@@ -67,6 +67,11 @@ Write-Host ""
 Write-Host $Snippet
 Write-Host ""
 
+Write-Host "🧪 Verifying setup..."
+Write-Host "Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'"
+Write-Host "Expected response: status: ok, schema_version: 8"
+Write-Host ""
+
 # Offer clipboard copy
 try {
   Set-Clipboard -Value $Snippet

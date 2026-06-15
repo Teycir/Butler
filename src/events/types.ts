@@ -99,7 +99,7 @@ export interface EventPayloadMap {
   'TODO_DELETED': { todo_id: number };
   'TODO_CLAIMED': { todo_id: number; session_id: string; claimed_at: number };
   'TODO_UNCLAIMED': { todo_id: number; session_id: string };
-  'TODO_CONFLICT': { todo_id: number; conflicting_session_id: string; conflict_type: 'concurrent_complete' | 'concurrent_update' };
+  'TODO_CONFLICT': { todo_id: number; conflicting_session_id: string; conflict_type: 'concurrent_complete' | 'concurrent_update'; conflicting_sessions?: string[]; hint?: string };
   'WIKI_UPDATED': { topic: string; content: string };
   'RULE_ADDED': { rule_id: string; content: string };
   'RULE_REMOVED': { rule_id: string };

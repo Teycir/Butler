@@ -6,7 +6,10 @@
  */
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { getDb } from '../../db/database.js';
+import { getDb, getDatabasePath } from '../../db/database.js';
+import fs from 'fs';
+
+const SERVER_START_TIME = Math.floor(Date.now() / 1000);
 
 export const observabilityToolDefs = [
   {
@@ -50,6 +53,14 @@ export const observabilityToolDefs = [
       },
       required: ['project_id']
     }
+  },
+  {
+    name: 'butlerping',
+    description: 'Lightweight diagnostic health-check to verify Butler is running and inspect database status.',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
   }
 ] as const;
 
@@ -58,6 +69,44 @@ export async function handleObservabilityTool(
   args: Record<string, any>,
   projectId: string
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
+  if (name === 'butlerping') {
+    const db = getDb();
+    const dbPath = getDatabasePath();
+    let db_size_kb = 0;
+    try {
+      const stats = fs.statSync(dbPath);
+      db_size_kb = Math.round(stats.size / 1024);
+    } catch {}
+
+    let schema_version = 0;
+    try {
+      const migRow = db.prepare('SELECT MAX(version) as max_v FROM butler_migrations').get() as any;
+      if (migRow) schema_version = Number(migRow.max_v);
+    } catch {}
+
+    let project_count = 0;
+    try {
+      const projRow = db.prepare('SELECT COUNT(*) as c FROM projects').get() as any;
+      if (projRow) project_count = Number(projRow.c);
+    } catch {}
+
+    const uptime_seconds = Math.floor(Date.now() / 1000) - SERVER_START_TIME;
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          status: 'ok',
+          db_path: dbPath,
+          db_size_kb,
+          schema_version,
+          project_count,
+          uptime_seconds
+        }, null, 2)
+      }]
+    };
+  }
+
   if (name !== 'eventsexport') {
     throw new McpError(ErrorCode.MethodNotFound, `Unknown observability tool: ${name}`);
   }

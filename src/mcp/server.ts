@@ -127,6 +127,15 @@ export class ButlerMcpServer {
         }
       }
 
+      if (name === 'butlerping') {
+        try {
+          return handleObservabilityTool(name, args, '');
+        } catch (err: any) {
+          if (err instanceof McpError) throw err;
+          return { isError: true, content: [{ type: 'text', text: `Internal error: ${err.message}` }] };
+        }
+      }
+
       // Resolve project_id — fall back to .butler/project.json when omitted
       if (!args.project_id || typeof args.project_id !== 'string' || args.project_id.trim() === '') {
         const defaultId = getDefaultProjectId();

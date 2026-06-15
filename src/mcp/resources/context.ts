@@ -230,6 +230,9 @@ function renderContextMarkdown(
     md += `_These TODOs had concurrent writes from multiple sessions recently._\n\n`;
     for (const c of state.conflicts.slice(-5)) {
       md += `- **TODO ID ${c.todo_id}** — ${c.conflict_type.replace('_', ' ')} detected between sessions \`${c.detected_by_session}\` and \`${c.conflicting_session_id}\` (${formatTimestamp(c.detected_at)})\n`;
+      if (c.hint) {
+        md += `  💡 *Resolution Hint:* ${c.hint}\n`;
+      }
     }
     md += `\n`;
   }

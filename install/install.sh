@@ -95,6 +95,11 @@ echo ""
 echo "$SNIPPET"
 echo ""
 
+echo "🧪 Verifying setup..."
+echo "Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'"
+echo "Expected response: status: ok, schema_version: 8"
+echo ""
+
 # Offer clipboard copy (Linux: xclip/xsel, macOS: pbcopy)
 if [[ "$OSTYPE" == "darwin"* ]]; then
   if command -v pbcopy &>/dev/null; then

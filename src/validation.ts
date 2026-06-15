@@ -5,7 +5,12 @@ export function validateProjectId(projectId: string): void {
   if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      'Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.'
+      JSON.stringify({
+        error: 'invalid_project_id',
+        message: 'Invalid project_id format. Only alphanumeric characters, underscores, and hyphens are allowed.',
+        hint: 'Use a simple project identifier like my-project or project123.',
+        docs: 'https://github.com/Teycir/Butler#project-management'
+      })
     );
   }
 }
@@ -14,13 +19,23 @@ export function validateSessionId(sessionId: string): void {
   if (sessionId === SYSTEM_SESSION_ID) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Invalid session_id. The identifier '${SYSTEM_SESSION_ID}' is reserved for system events.`
+      JSON.stringify({
+        error: 'reserved_session_id',
+        message: `Invalid session_id. The identifier '${SYSTEM_SESSION_ID}' is reserved for system events.`,
+        hint: 'Use a different session_id for your client.',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      'Invalid session_id format. Only alphanumeric characters, underscores, and hyphens are allowed.'
+      JSON.stringify({
+        error: 'invalid_session_id',
+        message: 'Invalid session_id format. Only alphanumeric characters, underscores, and hyphens are allowed.',
+        hint: 'Use session naming convention: {client}-{role}-{number} (e.g. cursor-main-1).',
+        docs: 'https://github.com/Teycir/Butler#session-management'
+      })
     );
   }
 }
@@ -29,7 +44,12 @@ export function sanitizeInput(str: string, maxLength: number = MAX_INPUT_LENGTH)
   if (str.length > maxLength) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      `Input exceeds maximum length of ${maxLength} characters`
+      JSON.stringify({
+        error: 'input_too_long',
+        message: `Input exceeds maximum length of ${maxLength} characters`,
+        hint: `Truncate or split your content to be under ${maxLength} characters.`,
+        docs: 'https://github.com/Teycir/Butler#input-limits'
+      })
     );
   }
   // Remove control characters except newlines and tabs

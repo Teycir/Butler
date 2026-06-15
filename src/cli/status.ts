@@ -127,20 +127,55 @@ function loadState(snapshot: SnapshotRow | null): ProjectState {
   }
 }
 
+import { computeHandoffQualityScore } from '../coordinator/lifecycle.js';
+
 // ─── Formatting helpers ───────────────────────────────────────────────────────
 
-const PRIORITY_ICON: Record<string, string> = { high: '🔴', medium: '🟡', low: '🟢' };
-const STATUS_ICON: Record<string, string>   = { alive: '🟢', stale: '🟡', dead: '🔴' };
+const colors = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m'
+};
+
+const PRIORITY_ICON: Record<string, string> = { high: '🔴', medium: '🟡', low: '🔵' };
 
 function relAge(unixSecs: number): string {
   return formatAge(getCurrentTimestamp() - unixSecs);
 }
 
-function printDivider(label: string) {
-  const line = '─'.repeat(48);
-  console.log(`\n${line}`);
-  console.log(` ${label}`);
-  console.log(line);
+
+function drawHeaderBox(projectId: string, liveCount: number, staleCount: number) {
+  const line1 = `🌐 Butler — ${projectId}`;
+  let statusText = `${colors.green}🟢 HEALTHY${colors.reset}`;
+  if (liveCount === 0 && staleCount > 0) {
+    statusText = `${colors.yellow}🟡 STALE${colors.reset}`;
+  } else if (liveCount === 0 && staleCount === 0) {
+    statusText = `${colors.red}🔴 INACTIVE${colors.reset}`;
+  }
+
+  const liveTotal = liveCount + staleCount;
+  const line2 = `${statusText}  |  ${liveTotal} live session${liveTotal !== 1 ? 's' : ''}`;
+  
+  const cleanLine1 = line1;
+  const cleanLine2 = `${liveCount === 0 && staleCount > 0 ? '🟡 STALE' : liveCount === 0 ? '🔴 INACTIVE' : '🟢 HEALTHY'}  |  ${liveTotal} live session${liveTotal !== 1 ? 's' : ''}`;
+  const contentWidth = Math.max(cleanLine1.length, cleanLine2.length) + 4; // padding
+  
+  const border = '═'.repeat(contentWidth);
+  const padLine = (text: string, cleanLength: number) => {
+    const spaces = ' '.repeat(contentWidth - cleanLength);
+    return `║  ${text}${spaces}  ║`;
+  };
+  
+  console.log(`╔${border}╗`);
+  console.log(padLine(line1, cleanLine1.length));
+  console.log(padLine(line2, cleanLine2.length));
+  console.log(`╚${border}╝`);
 }
 
 function printProjectStatus(
@@ -148,25 +183,30 @@ function printProjectStatus(
   project: ProjectRow,
   nowTs: number
 ) {
-  printDivider(`📁  ${project.id}`);
-
   // ── Sessions ────────────────────────────────────────────────────────────────
   const sessions = getSessions(db, project.id);
   const active   = sessions.filter(s => s.status !== 'dead');
   const dead     = sessions.filter(s => s.status === 'dead');
+  const liveCount = active.filter(s => s.status === 'alive').length;
+  const staleCount = active.filter(s => s.status === 'stale').length;
 
+  console.log('');
+  drawHeaderBox(project.id, liveCount, staleCount);
+
+  console.log(`\n${colors.bold}SESSIONS${colors.reset}`);
   if (active.length === 0) {
-    console.log('  Sessions     no active sessions');
+    console.log('  No active sessions');
   } else {
-    console.log('  Sessions');
     for (const s of active) {
-      const age  = formatAge(nowTs - s.last_heartbeat);
-      const icon = STATUS_ICON[s.status] ?? '⚪';
-      console.log(`    ${icon} ${s.id}  (${s.client_type})  heartbeat ${age}`);
+      const age  = formatAge(nowTs - s.last_heartbeat) + ' ago';
+      const icon = s.status === 'alive' ? `${colors.green}🟢${colors.reset}` : `${colors.yellow}🟡${colors.reset}`;
+      const name = s.id.padEnd(20);
+      const status = s.status.padEnd(8);
+      console.log(`  ${icon} ${name} ${status} ${age}`);
     }
   }
   if (dead.length > 0) {
-    console.log(`    ⚫  ${dead.length} dead session(s) hidden`);
+    console.log(`  ${colors.gray}⚫  ${dead.length} dead session(s) hidden${colors.reset}`);
   }
 
   // ── TODOs ───────────────────────────────────────────────────────────────────
@@ -176,52 +216,74 @@ function printProjectStatus(
   const pending  = todos.filter(t => t.status === 'pending');
   const done     = todos.filter(t => t.status === 'completed');
 
-  console.log(`\n  TODOs        ${pending.length} open, ${done.length} completed`);
-  if (pending.length > 0) {
+  console.log(`\n${colors.bold}TODOS (${pending.length} open, ${done.length} completed)${colors.reset}`);
+  if (pending.length === 0) {
+    console.log('  No open TODOs');
+  } else {
     const sorted = pending.sort((a, b) => {
       const order = { high: 0, medium: 1, low: 2 };
       return (order[a.priority as keyof typeof order] ?? 1) - (order[b.priority as keyof typeof order] ?? 1);
     });
     for (const t of sorted.slice(0, 10)) {
-      const claim  = t.claimed_by ? `  [claimed: ${t.claimed_by}]` : '';
+      const claim  = t.claimed_by ? `  ${colors.blue}🔒 ${t.claimed_by}${colors.reset}` : '  (unclaimed)';
       const pIcon  = PRIORITY_ICON[t.priority] ?? '⚪';
-      console.log(`    ${pIcon} [${t.id}] ${truncate(t.title, 60)}${claim}`);
+      const pLabel = t.priority === 'high' ? '[high]' : t.priority === 'medium' ? '[med] ' : '[low] ';
+      const pColor = t.priority === 'high' ? colors.red : t.priority === 'medium' ? colors.yellow : colors.blue;
+      const id = `#${t.id}`.padEnd(5);
+      console.log(`  ${pIcon} ${pColor}${pLabel}${colors.reset} ${id} ${truncate(t.title, 40).padEnd(40)} ${claim}`);
     }
     if (pending.length > 10) {
-      console.log(`    … and ${pending.length - 10} more`);
+      console.log(`  … and ${pending.length - 10} more`);
     }
   }
 
   // ── Conflicts ───────────────────────────────────────────────────────────────
   const conflicts = state.conflicts ?? [];
   if (conflicts.length > 0) {
-    console.log(`\n  ⚠️  Conflicts   ${conflicts.length} recent`);
+    console.log(`\n${colors.bold}${colors.red}⚠️  CONFLICTS (${conflicts.length} recent)${colors.reset}`);
     for (const c of conflicts.slice(0, 5)) {
-      console.log(`    TODO #${c.todo_id}  ${c.conflict_type}  (${relAge(c.detected_at)})`);
+      console.log(`  TODO #${c.todo_id}  ${c.conflict_type}  (${relAge(c.detected_at)})`);
     }
   }
 
   // ── Broadcasts ──────────────────────────────────────────────────────────────
   const broadcasts = state.broadcasts ?? [];
   if (broadcasts.length > 0) {
-    console.log(`\n  📢  Broadcasts  ${broadcasts.length} recent`);
+    console.log(`\n${colors.bold}📢  BROADCASTS (${broadcasts.length} recent)${colors.reset}`);
     for (const b of broadcasts.slice(-3)) {
-      console.log(`    ${relAge(b.sent_at)}  [${b.from_session_id}]: ${truncate(b.content, 70)}`);
+      console.log(`  ${relAge(b.sent_at)}  [${colors.cyan}${b.from_session_id}${colors.reset}]: ${truncate(b.content, 70)}`);
     }
   }
 
   // ── Recent handoffs ─────────────────────────────────────────────────────────
   const handoffEvents = getRecentHandoffs(db, project.id);
   if (handoffEvents.length > 0) {
-    console.log('\n  Handoffs      (last 3)');
+    console.log(`\n${colors.bold}🤝  RECENT HANDOFFS (last 3)${colors.reset}`);
     for (const ev of handoffEvents) {
       let payload: any = {};
       try { payload = JSON.parse(ev.payload); } catch {}
       const handoff = ev.type === 'HANDOFF_CREATED' ? payload : payload.handoff;
       const summary = handoff?.summary ? truncate(handoff.summary, 72) : '(no summary)';
       const src     = ev.type === 'HANDOFF_CREATED' ? 'agent' : 'system';
-      console.log(`    [${src}]  ${ev.session_id}  ${relAge(ev.created_at)}`);
-      console.log(`            ${summary}`);
+      console.log(`  [${src}]  ${colors.cyan}${ev.session_id}${colors.reset}  (${relAge(ev.created_at)})`);
+      console.log(`          ${colors.gray}"${summary}"${colors.reset}`);
+    }
+  }
+
+  // ── Handoff Quality Score ───────────────────────────────────────────────────
+  if (handoffEvents.length > 0) {
+    const ev = handoffEvents[0];
+    let payload: any = {};
+    try { payload = JSON.parse(ev.payload); } catch {}
+    const handoff = ev.type === 'HANDOFF_CREATED' ? payload : payload.handoff;
+    const summary = handoff?.summary || '';
+    if (summary) {
+      const score = computeHandoffQualityScore(summary);
+      const scorePercent = Math.round(score * 100);
+      const barLength = 10;
+      const filledLength = Math.round(score * barLength);
+      const bar = '█'.repeat(filledLength) + '░'.repeat(barLength - filledLength);
+      console.log(`\n${colors.bold}HANDOFF QUALITY SCORE  ${colors.green}${bar}${colors.reset}  ${scorePercent}% (last: ${ev.session_id})${colors.reset}`);
     }
   }
 
@@ -232,8 +294,8 @@ function printProjectStatus(
     ? `snapshot @ event #${snapshot.event_id}  (${relAge(snapshot.created_at)})`
     : 'no snapshot yet';
 
-  console.log(`\n  Event log     ${eventCount} events  |  last: ${lastEvent ? relAge(lastEvent.created_at) : 'never'}`);
-  console.log(`  Snapshot      ${snapInfo}`);
+  console.log(`\n${colors.gray}Event log: ${eventCount} events | last: ${lastEvent ? relAge(lastEvent.created_at) : 'never'}`);
+  console.log(`Snapshot:  ${snapInfo}${colors.reset}`);
 }
 
 // ─── JSON output ──────────────────────────────────────────────────────────────

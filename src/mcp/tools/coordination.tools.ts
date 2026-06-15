@@ -115,16 +115,36 @@ export async function handleCoordinationTool(
         const todo = state.todos[todoId];
 
         if (!todo) {
-          throw new McpError(ErrorCode.InvalidRequest, `TODO ID ${todoId} not found.`);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            JSON.stringify({
+              error: 'todo_not_found',
+              message: `TODO ID ${todoId} not found.`,
+              hint: 'Verify the todo_id is correct by listing TODOs.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
+          );
         }
         if (todo.status === 'completed') {
-          throw new McpError(ErrorCode.InvalidRequest, `TODO ID ${todoId} is already completed — cannot claim it.`);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            JSON.stringify({
+              error: 'todo_already_completed',
+              message: `TODO ID ${todoId} is already completed — cannot claim it.`,
+              hint: 'You cannot claim a completed task.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
+          );
         }
         if (todo.claimed_by && todo.claimed_by !== String(args.session_id)) {
           throw new McpError(
             ErrorCode.InvalidRequest,
-            `TODO ID ${todoId} is already claimed by session "${todo.claimed_by}". ` +
-            `Use todounclaim if that session is stale, or coordinate directly.`
+            JSON.stringify({
+              error: 'todo_already_claimed',
+              message: `TODO ID ${todoId} is already claimed by session "${todo.claimed_by}".`,
+              hint: 'Use todounclaim if that session is stale, or coordinate directly.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
           );
         }
 
@@ -155,15 +175,36 @@ export async function handleCoordinationTool(
         const todo = state.todos[todoId];
 
         if (!todo) {
-          throw new McpError(ErrorCode.InvalidRequest, `TODO ID ${todoId} not found.`);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            JSON.stringify({
+              error: 'todo_not_found',
+              message: `TODO ID ${todoId} not found.`,
+              hint: 'Verify the todo_id is correct by listing TODOs.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
+          );
         }
         if (!todo.claimed_by) {
-          throw new McpError(ErrorCode.InvalidRequest, `TODO ID ${todoId} has no active claim to release.`);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            JSON.stringify({
+              error: 'todo_not_claimed',
+              message: `TODO ID ${todoId} has no active claim to release.`,
+              hint: 'You can only release claims that are actively held.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
+          );
         }
         if (todo.claimed_by !== String(args.session_id)) {
           throw new McpError(
             ErrorCode.InvalidRequest,
-            `Cannot unclaim TODO ID ${todoId} — it is held by session "${todo.claimed_by}", not "${args.session_id}".`
+            JSON.stringify({
+              error: 'todo_claim_owner_mismatch',
+              message: `Cannot unclaim TODO ID ${todoId} — it is held by session "${todo.claimed_by}", not "${args.session_id}".`,
+              hint: 'Only the session holding the claim (or system force-release) can release it.',
+              docs: 'https://github.com/Teycir/Butler#todo-management'
+            })
           );
         }
 
@@ -190,7 +231,15 @@ export async function handleCoordinationTool(
       const content = sanitizeInput(String(args.content), 2048);
 
       if (toSessionId === String(args.session_id)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Cannot send a message to yourself.');
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          JSON.stringify({
+            error: 'message_self_invalid',
+            message: 'Cannot send a message to yourself.',
+            hint: 'Specify a different, active session ID as the recipient.',
+            docs: 'https://github.com/Teycir/Butler#coordination-messaging'
+          })
+        );
       }
 
       // Warn if recipient session is not currently active, but don't block —
@@ -270,15 +319,23 @@ export function detectAndRecordConflict(
   lastUpdatedBy: string,
   lastUpdatedAt: number,
   conflictType: 'concurrent_complete' | 'concurrent_update'
-): void {
+): string | null {
   // A conflict exists when another session touched this TODO very recently.
-  if (lastUpdatedBy === writingSessionId) return; // same session, no conflict
+  if (lastUpdatedBy === writingSessionId) return null; // same session, no conflict
   const ageOfLastWrite = getCurrentTimestamp() - lastUpdatedAt;
-  if (ageOfLastWrite > CONFLICT_WINDOW_SECS) return; // old enough, no conflict
+  if (ageOfLastWrite > CONFLICT_WINDOW_SECS) return null; // old enough, no conflict
+
+  const sessions = [writingSessionId, lastUpdatedBy];
+  const hintText = conflictType === 'concurrent_complete'
+    ? `Both sessions marked #${todoId} complete within ${ageOfLastWrite}s. Suggest: verify final state matches expectations and delete duplicate event if needed.`
+    : `Both sessions updated #${todoId} within ${ageOfLastWrite}s. Suggest: verify final state matches expectations and reconcile differences if needed.`;
 
   appendEvent(projectId, writingSessionId, 'TODO_CONFLICT', {
     todo_id: todoId,
     conflicting_session_id: lastUpdatedBy,
-    conflict_type: conflictType
+    conflict_type: conflictType,
+    conflicting_sessions: sessions,
+    hint: hintText
   });
+  return hintText;
 }

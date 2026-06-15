@@ -40,6 +40,8 @@ export interface ConflictRecord {
   conflict_type: 'concurrent_complete' | 'concurrent_update';
   detected_at: number;
   detected_by_session: string;
+  conflicting_sessions?: string[];
+  hint?: string;
 }
 
 export interface MessageRecord {

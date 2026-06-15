@@ -118,27 +118,71 @@ export async function handleTodoTool(
       const todoId = Number(args.todo_id);
       const reqVersion = Number(args.version);
 
-      const event = getDb().transaction(() => {
+      const { todoTitle, conflictHint } = getDb().transaction(() => {
         const state = materializeProject(projectId, false);
         const todo = state.todos[todoId];
 
-        if (!todo) throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
-        if (todo.status === 'completed') throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} is already completed.`);
+        if (!todo) throw new McpError(
+          ErrorCode.InvalidRequest,
+          JSON.stringify({
+            error: 'todo_not_found',
+            message: `TODO task ID ${todoId} not found.`,
+            hint: 'Verify the todo_id is correct by listing TODOs.',
+            docs: 'https://github.com/Teycir/Butler#todo-management'
+          })
+        );
+        if (todo.status === 'completed') throw new McpError(
+          ErrorCode.InvalidRequest,
+          JSON.stringify({
+            error: 'todo_already_completed',
+            message: `TODO task ID ${todoId} is already completed.`,
+            hint: 'You cannot complete an already completed task.',
+            docs: 'https://github.com/Teycir/Butler#todo-management'
+          })
+        );
         if (todo.version !== reqVersion) throw new McpError(
           ErrorCode.InvalidParams,
-          `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}. Fetch and retry.`
+          JSON.stringify({
+            error: 'version_mismatch',
+            message: `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}.`,
+            hint: 'Fetch the latest context/state and retry with the updated version.',
+            docs: 'https://github.com/Teycir/Butler#concurrency-control'
+          })
         );
 
         // Phase 3.1 — detect concurrent writes from other sessions
-        detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_complete');
+        const hint = detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_complete');
 
         const ev = appendEvent(projectId, String(args.session_id), 'TODO_COMPLETED', { todo_id: todoId, version: reqVersion });
         updateLastEventSeen(String(args.session_id), ev.id);
-        return ev;
+        return { event: ev, todoTitle: todo.title, conflictHint: hint };
       })();
 
       invalidateProjectCache(projectId);
-      return { content: [{ type: 'text', text: `Shared TODO ID ${todoId} marked as completed! (Event ID: ${event.id})` }] };
+
+      const state = materializeProject(projectId, false);
+      const nextUnclaimed = Object.values(state.todos)
+        .filter(t => t.status === 'pending' && !t.claimed_by)
+        .sort((a, b) => {
+          const prioMap = { high: 0, medium: 1, low: 2 };
+          const pA = prioMap[a.priority] ?? 1;
+          const pB = prioMap[b.priority] ?? 1;
+          if (pA !== pB) return pA - pB;
+          return a.id - b.id;
+        })
+        .slice(0, 3);
+
+      let text = `✅ TODO #${todoId} completed: "${todoTitle}"`;
+      if (conflictHint) {
+        text += `\n⚠️  CONFLICT DETECTED: ${conflictHint}`;
+      }
+      if (nextUnclaimed.length > 0) {
+        text += `\n📋 Next unclaimed TODOs:\n` + nextUnclaimed.map(t => `  • [${t.priority}] #${t.id} — ${t.title}`).join('\n');
+      } else {
+        text += `\n📋 No more unclaimed TODOs left!`;
+      }
+
+      return { content: [{ type: 'text', text }] };
     }
 
     case 'todoupdate': {
@@ -146,18 +190,31 @@ export async function handleTodoTool(
       const todoId = Number(args.todo_id);
       const reqVersion = Number(args.version);
 
-      const event = getDb().transaction(() => {
+      const { event, conflictHint } = getDb().transaction(() => {
         const state = materializeProject(projectId, false);
         const todo = state.todos[todoId];
 
-        if (!todo) throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+        if (!todo) throw new McpError(
+          ErrorCode.InvalidRequest,
+          JSON.stringify({
+            error: 'todo_not_found',
+            message: `TODO task ID ${todoId} not found.`,
+            hint: 'Verify the todo_id is correct by listing TODOs.',
+            docs: 'https://github.com/Teycir/Butler#todo-management'
+          })
+        );
         if (todo.version !== reqVersion) throw new McpError(
           ErrorCode.InvalidParams,
-          `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}. Fetch and retry.`
+          JSON.stringify({
+            error: 'version_mismatch',
+            message: `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}.`,
+            hint: 'Fetch the latest context/state and retry with the updated version.',
+            docs: 'https://github.com/Teycir/Butler#concurrency-control'
+          })
         );
 
         // Phase 3.1 — detect concurrent writes from other sessions
-        detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_update');
+        const hint = detectAndRecordConflict(projectId, todoId, String(args.session_id), todo.updated_by, todo.updated_at, 'concurrent_update');
 
         const ev = appendEvent(projectId, String(args.session_id), 'TODO_UPDATED', {
           todo_id: todoId,
@@ -166,11 +223,15 @@ export async function handleTodoTool(
           status: args.status as 'pending' | 'completed' | undefined
         });
         updateLastEventSeen(String(args.session_id), ev.id);
-        return ev;
+        return { event: ev, conflictHint: hint };
       })();
 
       invalidateProjectCache(projectId);
-      return { content: [{ type: 'text', text: `TODO ID ${todoId} updated! (Event ID: ${event.id})` }] };
+      let text = `TODO ID ${todoId} updated! (Event ID: ${event.id})`;
+      if (conflictHint) {
+        text += `\n⚠️  CONFLICT DETECTED: ${conflictHint}`;
+      }
+      return { content: [{ type: 'text', text }] };
     }
 
     case 'tododelete': {
@@ -182,10 +243,23 @@ export async function handleTodoTool(
         const state = materializeProject(projectId, false);
         const todo = state.todos[todoId];
 
-        if (!todo) throw new McpError(ErrorCode.InvalidRequest, `TODO task ID ${todoId} not found.`);
+        if (!todo) throw new McpError(
+          ErrorCode.InvalidRequest,
+          JSON.stringify({
+            error: 'todo_not_found',
+            message: `TODO task ID ${todoId} not found.`,
+            hint: 'Verify the todo_id is correct by listing TODOs.',
+            docs: 'https://github.com/Teycir/Butler#todo-management'
+          })
+        );
         if (todo.version !== reqVersion) throw new McpError(
           ErrorCode.InvalidParams,
-          `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}. Fetch and retry.`
+          JSON.stringify({
+            error: 'version_mismatch',
+            message: `Version mismatch for TODO ID ${todoId}. Expected ${todo.version}, got ${reqVersion}.`,
+            hint: 'Fetch the latest context/state and retry with the updated version.',
+            docs: 'https://github.com/Teycir/Butler#concurrency-control'
+          })
         );
 
         const ev = appendEvent(projectId, String(args.session_id), 'TODO_DELETED', { todo_id: todoId });

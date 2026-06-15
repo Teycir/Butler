@@ -1,8 +1,12 @@
 {
   "name": "butler-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Persistent shared memory and coordination layer for AI coding agents",
   "main": "dist/index.js",
+  "bin": {
+    "butler": "./dist/cli/main.js",
+    "butler-mcp": "./dist/cli/main.js"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
