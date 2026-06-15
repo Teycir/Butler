@@ -3,8 +3,8 @@
 # Usage: bash install.sh [--db-path /custom/path/butler.db]
 set -e
 
-BUTLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RELEASE_DIR="$HOME/Mcp/butler-mcp"
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$INSTALL_DIR/.." && pwd)"
 DB_PATH="${BUTLER_DB_PATH:-$HOME/.butler/butler.db}"
 
 while [[ $# -gt 0 ]]; do
@@ -16,103 +16,9 @@ done
 
 # Build from source
 echo "📦 Building Butler..."
-cd "$BUTLER_DIR"
+cd "$REPO_ROOT"
 npm install --silent
 npm run build
 
-# Deploy to ~/Mcp/butler-mcp (create if missing)
-echo "🚀 Deploying to $RELEASE_DIR..."
-mkdir -p "$RELEASE_DIR/dist"
-cp -r "$BUTLER_DIR/dist/"* "$RELEASE_DIR/dist/"
-# Copy package.json so node can resolve the module
-cp "$BUTLER_DIR/package.json" "$RELEASE_DIR/"
-
-# Ensure DB directory exists
-mkdir -p "$(dirname "$DB_PATH")"
-
-NODE_BIN="$(which node)"
-ENTRY="$RELEASE_DIR/dist/index.js"
-
-inject_mcp() {
-  local cfg="$1"
-  local name="$2"
-  if [[ ! -d "$(dirname "$cfg")" ]]; then
-    echo "  ⚠️  $(basename "$(dirname "$cfg")") not found, skipping"
-    return
-  fi
-  [[ ! -f "$cfg" ]] && echo '{"mcpServers":{}}' > "$cfg"
-  node - "$cfg" "$name" "$NODE_BIN" "$ENTRY" "$DB_PATH" <<'JSEOF'
-const fs = require('fs');
-const [,, cfg, name, nodeBin, entry, dbPath] = process.argv;
-const data = JSON.parse(fs.readFileSync(cfg, 'utf8'));
-data.mcpServers = data.mcpServers || {};
-data.mcpServers[name] = { command: nodeBin, args: [entry], env: { BUTLER_DB_PATH: dbPath } };
-fs.writeFileSync(cfg, JSON.stringify(data, null, 2));
-console.log('  → ' + cfg);
-JSEOF
-}
-
-echo ""
-echo "✅ Release: $ENTRY"
-echo "🗄️  Database: $DB_PATH"
-echo ""
-echo "🔧 Configuring MCP clients..."
-
-# Claude Desktop
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  inject_mcp "$HOME/Library/Application Support/Claude/claude_desktop_config.json" "butler"
-else
-  inject_mcp "$HOME/.config/Claude/claude_desktop_config.json" "butler"
-fi
-
-# Kiro CLI
-inject_mcp "$HOME/.config/kiro-cli/mcp.json" "butler"
-
-# Kilo Code
-inject_mcp "$HOME/.config/Antigravity/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json" "butler"
-
-# VS Code
-inject_mcp "$HOME/.config/Code/User/mcp.json" "butler"
-
-# Cursor
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  inject_mcp "$HOME/Library/Application Support/Cursor/User/mcp.json" "butler"
-else
-  inject_mcp "$HOME/.config/Cursor/User/mcp.json" "butler"
-fi
-
-echo ""
-echo "🎉 Done! Restart your AI clients to activate Butler."
-echo ""
-echo "   Manual snippet:"
-echo "   \"butler\": { \"command\": \"$NODE_BIN\", \"args\": [\"$ENTRY\"], \"env\": { \"BUTLER_DB_PATH\": \"$DB_PATH\" } }"
-echo ""
-echo "──────────────────────────────────────────────────────────────────"
-echo "📋  SYSTEM PROMPT SNIPPET — paste this into your AI client once:"
-echo "──────────────────────────────────────────────────────────────────"
-SNIPPET="On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = \"<client>-<4 random chars>\", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect."
-echo ""
-echo "$SNIPPET"
-echo ""
-
-echo "🧪 Verifying setup..."
-echo "Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'"
-echo "Expected response: status: ok, schema_version: 8"
-echo ""
-
-# Offer clipboard copy (Linux: xclip/xsel, macOS: pbcopy)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  if command -v pbcopy &>/dev/null; then
-    echo "$SNIPPET" | pbcopy
-    echo "✅ Snippet copied to clipboard (pbcopy)."
-  fi
-elif command -v xclip &>/dev/null; then
-  echo "$SNIPPET" | xclip -selection clipboard
-  echo "✅ Snippet copied to clipboard (xclip)."
-elif command -v xsel &>/dev/null; then
-  echo "$SNIPPET" | xsel --clipboard --input
-  echo "✅ Snippet copied to clipboard (xsel)."
-else
-  echo "💡 Copy the snippet above manually (no clipboard tool detected)."
-fi
-echo "──────────────────────────────────────────────────────────────────"
+# Run the unified installation logic via CLI
+node dist/cli/main.js install --db-path "$DB_PATH"

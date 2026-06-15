@@ -64,6 +64,14 @@ function askQuestion(query: string, defaultValue?: string): Promise<string> {
   });
 }
 
+function parseJsonc(filePath: string): any {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const clean = raw
+    .replace(/\\"|"(?:\\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) => g ? "" : m)
+    .replace(/,(\s*[\]}])/g, '$1');
+  return JSON.parse(clean);
+}
+
 // ─── Subcommands ─────────────────────────────────────────────────────────────
 
 function handleClients(subArgs: string[]) {
@@ -182,20 +190,40 @@ async function handleInstall() {
   console.log('  ✅ dist/ synced');
 
   // ── Step 3: Ensure DB dir exists ──────────────────────────────────────────
-  const dbPath = path.join(os.homedir(), '.butler', 'butler.db');
+  const dbPathIdx = process.argv.indexOf('--db-path');
+  const dbPath = dbPathIdx !== -1
+    ? process.argv[dbPathIdx + 1]
+    : (process.env.BUTLER_DB_PATH || path.join(os.homedir(), '.butler', 'butler.db'));
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const entry = path.join(releaseDir, 'dist', 'index.js');
   const nodeBin = process.execPath;
 
   // ── Step 4: Inject into registered AI clients ─────────────────────────────
-  const configs = getClientConfigs();
+  let configs = getClientConfigs();
 
   if (configs.length === 0) {
-    console.log('\n⚠️  No AI clients registered yet.');
-    console.log('   Add one first, e.g.:  butler clients add claude-desktop');
-    console.log('   See all options with: butler clients list\n');
-    return;
+    console.log('🔍 No clients registered yet. Scanning system for known AI clients...');
+    const known = getAllKnownClients();
+    const detected: string[] = [];
+    for (const client of known) {
+      const dir = path.dirname(client.path);
+      if (fs.existsSync(dir)) {
+        const res = addClientSlug(client.slug);
+        if (res.ok) {
+          detected.push(client.slug);
+        }
+      }
+    }
+    if (detected.length > 0) {
+      console.log(`✅ Automatically registered detected clients: ${detected.join(', ')}`);
+      configs = getClientConfigs();
+    } else {
+      console.log('\n⚠️  No active AI clients detected on this system.');
+      console.log('   You can register one manually using:  butler clients add <slug> --path /path/to/config.json');
+      console.log('   See all options with: butler clients list\n');
+      return;
+    }
   }
 
   function injectMcp(cfgPath: string, name: string, nodeBin: string, entry: string, dbPath: string) {
@@ -207,7 +235,7 @@ async function handleInstall() {
     let data: any = { mcpServers: {} };
     if (fs.existsSync(cfgPath)) {
       try {
-        data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        data = parseJsonc(cfgPath);
       } catch (err) {
         console.error(`  ⚠️  Failed to parse ${cfgPath}, starting fresh:`, err);
       }
@@ -376,7 +404,7 @@ function handleDoctor() {
       continue;
     }
     try {
-      const data = JSON.parse(fs.readFileSync(client.path, 'utf8'));
+      const data = parseJsonc(client.path);
       if (data.mcpServers && data.mcpServers.butler) {
         console.log(`✅ ${client.slug} — OK`);
       } else {
