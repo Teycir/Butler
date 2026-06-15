@@ -198,7 +198,7 @@ graph TD
     end
 
     subgraph Dev_Tools["Developer Tools (local, no MCP)"]
-        CLI[🖥️ cli/status.ts<br/>npm run status]
+        CLI[🖥️ cli/status.ts · cli/tui.ts<br/>npm run status · npm run tui]
         DASH[📊 cli/dashboard.ts<br/>npm run dashboard → :7888 SSE]
     end
 
@@ -211,31 +211,35 @@ graph TD
         T_TODO[todo.tools.ts<br/>add · complete · update · delete · list]
         T_KNOW[knowledge.tools.ts<br/>wiki · rule · decision · handoff]
         T_MEM[memory.tools.ts<br/>store · search · delete · projectlist]
-        T_COORD[coordination.tools.ts<br/>claim · unclaim · message · broadcast]
-        T_OBS[observability.tools.ts<br/>eventsexport]
+        T_COORD[coordination.tools.ts<br/>claim · unclaim · message · broadcast · synccontext]
+        T_OBS[observability.tools.ts<br/>eventsexport · butlerping]
     end
 
-    subgraph Resources["mcp/resources.ts"]
-        R_CTX[context · todos · wiki<br/>sessions · memories · diff]
+    subgraph Resources["mcp/resources.ts · mcp/resources/"]
+        R_CTX[context · todos · wiki<br/>sessions · memories · diff · checkpoints]
     end
 
     subgraph Coordinator["src/coordinator/"]
         LIFE[lifecycle.ts<br/>session CRUD · heartbeat monitor<br/>stale/dead detection · ensureSession]
         HAND[handoff.ts<br/>generateStructuredHandoff<br/>computeHandoffQualityScore]
         DIFF[diff.ts<br/>getProjectDiff<br/>getContextStaleness]
+        SES[session.ts<br/>SessionRecord · low-level read helpers]
     end
 
     subgraph Events["src/events/"]
         STORE[store.ts<br/>appendEvent · getEvents<br/>createSnapshot · getLatestSnapshot]
-        MAT[materializer.ts<br/>projectEvent · materializeProject<br/>in-memory ProjectState cache]
+        MAT[materializer.ts<br/>materializeProject · in-memory ProjectState cache]
+        PROJ[projections.ts<br/>projectEvent · per-event state transitions]
+        TYPES[types.ts<br/>EventRecord · event type definitions]
     end
 
     subgraph Vector["src/vector/"]
         VEC[index.ts<br/>Pure-JS TF-IDF<br/>addMemory · searchMemories · deleteMemory]
+        SIM[similarity.ts<br/>cosine similarity · token scoring]
     end
 
     subgraph DB_Layer["src/db/"]
-        SCHEMA[schema.ts<br/>INIT_SCHEMA_SQL<br/>VERSIONED_MIGRATIONS v1–v6]
+        SCHEMA[schema.ts<br/>INIT_SCHEMA_SQL<br/>VERSIONED_MIGRATIONS v1–v8]
         DATABASE[database.ts<br/>initDatabase · getDb · closeDatabase]
     end
 
@@ -247,6 +251,8 @@ graph TD
         T5[(snapshots)]
         T6[(memories)]
         T7[(butler_migrations)]
+        T8[(checkpoints)]
+        T9[(writes)]
     end
 
     C1 & C2 & C3 -->|JSON-RPC stdio| MCP
@@ -257,11 +263,15 @@ graph TD
     T_KNOW --> HAND
     R_CTX --> MAT & LIFE & DIFF & VEC
     LIFE --> STORE & HAND & DIFF
+    LIFE --> SES
+    HAND --> SES
     STORE --> DATABASE
-    MAT --> STORE
+    MAT --> STORE & PROJ & TYPES
+    PROJ --> TYPES
+    VEC --> SIM
     VEC --> DATABASE
     DATABASE --> SCHEMA
-    DATABASE --> T1 & T2 & T3 & T4 & T5 & T6 & T7
+    DATABASE --> T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8 & T9
     CLI --> DATABASE
     DASH --> DATABASE
 ```
@@ -352,6 +362,7 @@ npm test
 | `butler://projects/{id}/sessions` | Active and stale session registry (JSON). |
 | `butler://projects/{id}/memories` | Complete project memory log (JSON). |
 | `butler://projects/{id}/diff?since={eventId}` | Compact changelog of all state changes since a given event ID, grouped by type. |
+| `butler://projects/{id}/checkpoints` | LangGraph orchestration checkpoints stored for the project (JSON). |
 
 ### Tools
 
@@ -378,6 +389,7 @@ npm test
 | `todounclaim` | Release a claim, making the TODO available again. |
 | `messagesend` | Send a direct message to another active session (stored in event log; delivered on reconnect). |
 | `broadcast` | Announce something to all active sessions — visible in every agent's next context read under 📢 Broadcasts. |
+| `synccontext` | Force an immediate context sync across all peer sessions, surfacing the latest shared state without waiting for the next heartbeat cycle. |
 
 #### Knowledge & Memory
 | Tool | Description |
@@ -396,33 +408,178 @@ npm test
 | Tool | Description |
 | :--- | :--- |
 | `eventsexport` | Export the raw event log as `json` (array) or `ndjson` (newline-delimited). Supports `since`, `until`, `session_id`, `event_type`, and `limit` filters. Default 500, max 5000 events. |
+| `butlerping` | Lightweight health-check returning DB path, size, schema version, project count, and uptime. |
 
 ---
 
 ## 🖥️ Developer CLI
 
-Butler ships two local CLI commands — no MCP server required.
+Butler ships with a local command line interface (CLI) to configure, manage, and monitor your multi-agent workspaces — no MCP server connection required to run diagnostics or status checks.
 
-### `npm run status`
+### `butler install`
 
-Reads `.butler/butler.db` directly and prints a live terminal summary:
-- Active sessions (alive / stale) with last heartbeat times
-- Open TODOs grouped by priority
-- Recent handoffs and their quality scores
-- Conflict log and broadcast history
-- Event log stats and snapshot info
+Deploys the Butler production bundle to `~/Mcp/butler-mcp` and automatically injects the Butler MCP server configuration into your local AI client config files (Claude Desktop, Cursor, Kiro CLI, VS Code, and Kilo Code).
 
-Supports `--project <id>`, `--db <path>`, `--json`, and `--help` flags. `--json` emits structured output for piping into `jq` or external tooling.
+```text
+$ butler install
+📦 Installing Butler globally/locally...
+🚀 Deploying to /home/user/Mcp/butler-mcp...
 
-### `npm run dashboard`
+🔧 Configuring MCP clients...
+  → /home/user/.config/Claude/claude_desktop_config.json
+  → /home/user/.config/Cursor/User/mcp.json
+  → /home/user/.config/kiro-cli/mcp.json
+  → /home/user/.config/Code/User/mcp.json
+  → /home/user/.config/Antigravity/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json
 
-Starts a local read-only web dashboard at `http://localhost:7888`:
-- Live SSE push every 5 seconds — zero page refresh
-- Session heartbeat status, open TODOs with priority and claim indicators
-- Broadcasts, conflict warnings, and a scrolling 30-event log
-- Purely observational — zero writes through the UI
+🎉 Done! Restart your AI clients to activate Butler.
+
+──────────────────────────────────────────────────────────────────
+📋  SYSTEM PROMPT SNIPPET — paste this into your AI client once:
+──────────────────────────────────────────────────────────────────
+
+On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = "<client>-<4 random chars>", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect.
+
+🧪 Verifying setup...
+Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'
+Expected response: status: ok, schema_version: 8
+```
+
+### `butler init`
+
+Interactively initializes a new project configuration inside your local workspace. This creates `.butler/project.json` and adds it to your `.gitignore` so your agents can automatically identify the correct project database namespace.
+
+```text
+$ butler init
+🌐 Butler — Project Setup
+
+? Project ID [default: my-project]: my-project
+? Project name (optional): My Project Workspace
+? Default client [default: Claude Desktop]: Claude Desktop
+
+✅ Created .butler/project.json
+✅ Added .butler/ to .gitignore
+✅ Ready! Open your AI client and start coding.
+```
+
+### `butler status`
+
+Reads the global SQLite database (`~/.butler/butler.db`) directly and outputs a comprehensive diagnostic summary of the workspace's projects, sessions, active/completed tasks, and recent handoffs.
+
+```text
+$ butler status
+🤵  Butler Status   15/06/2026 20:08:12
+    Database: /home/user/.butler/butler.db
+    Projects: 4
+
+╔═══════════════════════════════════╗
+║  🌐 Butler — Butler               ║
+║  🔴 INACTIVE  |  0 live sessions  ║
+╚═══════════════════════════════════╝
+
+SESSIONS
+  No active sessions
+  ⚫  1 dead session(s) hidden
+
+TODOS (0 open, 0 completed)
+  No open TODOs
+
+🤝  RECENT HANDOFFS (last 3)
+  [system]  claude-r4x  (127h ago)
+          "Session claude-r4x lost connection (missed heartbeat). Auto-generated c…"
+  [system]  claude-r4x  (127h ago)
+          "Session claude-r4x lost connection (missed heartbeat). Auto-generated c…"
+
+HANDOFF QUALITY SCORE  █████░░░░░  49% (last: claude-r4x)
+
+Event log: 19 events | last: 127h ago
+Snapshot:  no snapshot yet
+```
+
+Supports `--project <id>`, `--db <path>`, `--json`, and `--help` flags.
+
+### `butler tui`
+
+Launches a live split-screen Terminal User Interface (TUI) that refreshes every 2 seconds, displaying real-time agent presence, broadcast events, active tasks, version conflicts, and handoff quality metrics.
+
+#### 🌟 Features Showcase
+
+| 🖥️ Live Orchestration Dashboard | 👤 Active Session Topology & Status |
+| :---: | :---: |
+| ![Butler TUI Dashboard](public/tui_snapshot.jpg) | ![Active Session Topology](public/tui_session_topology.jpg) |
+| **⚡ Concurrency Mutation Conflicts** | **🤝 Handoff Quality Scorecard & Coaching** |
+| ![Mutation Conflicts](public/tui_conflict_alerting.jpg) | ![Handoff Quality Coaching](public/tui_handoff_coaching.jpg) |
+
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 🤵 BUTLER ORCHESTRATOR │ Project: api-hunter                                     ● 20:13:57 │
+│ DB: ~/.butler/butler.db (128 KB)                │ Schema: v8 │ Projects: 4 │ Status: 🟢 HEALTHY  │
+├────────────────────────────────────────────────┬─────────────────────────────────────────────────┤
+│ 👤 Topology Sessions (2)                       │ 🎯 Shared Task Space (3 open)                    │
+│   ● cursor-main-1    cursor       12s ago      │   Progress: [██████░░░░░░░░░░] 37% (6/16 done)   │
+│   ○ claude-desk-2    claude       45s ago      │   ■ HGH [#1] Implement JWT signat… │ 🔒 cursor-m… │
+│                                                │   ■ MED [#2] Add OAuth tests       │ unclaimed    │
+│ 📢 Broadcast Stream (2)                        │   ■ LOW [#3] Verify README typos   │ unclaimed    │
+│   10s ago [cursor-m]: refactored auth.ts       │                                                  │
+│   45s ago [claude-d]: pulling main branch      │ ⚡ Mutation Conflicts (1)                         │
+│                                                │   ⚠️  Task #1 │ concurrent_update │ 8s ago    │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 🤝 RECENT WORKSPACE HANDOFFS                                                                      │
+│   [agent] cursor-main-1 (10m ago) - "Refactored JWT signature checking and fixed algorithm bypass."│
+│   [system] claude-desk-2 (25m ago) - "Session claude-desk-2 disconnected gracefully."            │
+│   Quality Rating: [███████████░░░░] 73% (latest: cursor-main-1) │ Words: 24 │ Struct: ✓ │ Verbs: ✓│
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Events: 142 │ Last Event: TODO_COMPLETED (12s ago)        [Q] Quit │ [R] Refresh │ Auto-Refresh: 2s  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+*Interactive controls:* Press `q` to quit, `r` to force a manual refresh.
+
+### `butler dashboard`
+
+Starts a local read-only web dashboard with SSE (Server-Sent Events) live pushing every 5 seconds to show active sessions, TODOs, conflict lists, and event trails.
+
+```text
+$ butler dashboard
+🌐 Serving Butler dashboard at http://localhost:7888
+```
 
 Supports `--port <n>`, `--host <addr>`, and `--db <path>` flags.
+
+### `butler ping`
+
+Outputs structured database size and schema metrics as JSON. Perfect for piping to `jq` or integrating into external status monitoring tools.
+
+```json
+{
+  "status": "ok",
+  "db_path": "/home/user/.butler/butler.db",
+  "db_size_kb": 128,
+  "schema_version": 8,
+  "project_count": 4
+}
+```
+
+### `butler doctor`
+
+Runs environmental diagnostics to ensure Node.js compatibility, built output validity, database state, and client MCP configurations are set up correctly.
+
+```text
+$ butler doctor
+🩺 Butler Doctor Diagnostics
+
+✅ Node.js v20.20.0 — OK
+✅ Butler build — OK (dist/index.js exists)
+✅ Database — OK (/home/user/.butler/butler.db, schema v8)
+✅ Claude Desktop config — OK (butler entry found)
+⚠️  Cursor config — NOT FOUND (missing file)
+✅ Kiro CLI config — OK (butler entry found)
+✅ VS Code config — OK (butler entry found)
+✅ Kilo Code config — OK (butler entry found)
+
+Fix: Run `butler install` to repair configuration files.
+```
 
 ---
 
@@ -581,23 +738,35 @@ Butler includes a built-in multi-agent state graph definition (`OrchestratorStat
 ```text
 Butler/
 ├── src/
-│   ├── db/            # SQLite connection pool, WAL mode, versioned schema migrations
-│   ├── events/        # Event store (append-only log), materializer, snapshots
-│   ├── coordinator/   # Heartbeat registry, session lifecycle, handoff quality scoring
+│   ├── db/            # SQLite connection pool, WAL mode, versioned schema migrations (v1–v8)
+│   ├── events/        # Event store (append-only log), materializer, projections, type definitions
+│   ├── coordinator/   # Heartbeat registry, session lifecycle, handoff quality scoring, session helpers
 │   ├── vector/        # Pure-JS TF-IDF sparse memory indexer + cosine similarity
+│   ├── langgraph/     # LangGraph checkpointer, orchestrator graph, builder utilities
+│   ├── lib/           # Shared formatting utilities
 │   ├── mcp/
 │   │   ├── server.ts                    # MCP stdio transport, routing, auto-registration
-│   │   ├── resources.ts                 # context, todos, wiki, sessions, memories, diff
+│   │   ├── resources.ts                 # context, todos, wiki, sessions, memories, diff, checkpoints
+│   │   ├── resources/                   # Resource handler modules (context.ts, diff.ts)
 │   │   └── tools/
 │   │       ├── session.tools.ts         # sessionregister, sessionheartbeat, sessiondisconnect
 │   │       ├── todo.tools.ts            # todoadd, todocomplete, todoupdate, tododelete, todolist
 │   │       ├── knowledge.tools.ts       # wikiupdate, ruleadd, ruleremove, decisionrecord, handoffcreate
 │   │       ├── memory.tools.ts          # memorystore, memorysearch, memorydelete, projectlist
-│   │       ├── coordination.tools.ts    # todoclaim, todounclaim, messagesend, broadcast
-│   │       └── observability.tools.ts   # eventsexport
+│   │       ├── coordination.tools.ts    # todoclaim, todounclaim, messagesend, broadcast, synccontext
+│   │       ├── coordination/            # Coordination sub-handlers (sync.ts)
+│   │       └── observability.tools.ts   # eventsexport, butlerping
 │   ├── cli/
+│   │   ├── main.ts        # CLI entry point and command router
 │   │   ├── status.ts      # `npm run status` — terminal project summary
-│   │   └── dashboard.ts   # `npm run dashboard` — local SSE web dashboard
+│   │   ├── tui.ts         # `npm run tui` — live split-screen terminal UI
+│   │   ├── tuiRenderer.ts # TUI rendering logic
+│   │   ├── tuiTheme.ts    # TUI color and styling constants
+│   │   ├── dashboard.ts   # `npm run dashboard` — local SSE web dashboard
+│   │   ├── dashboardServer.ts    # SSE server and HTTP handler
+│   │   ├── dashboardHandlers.ts  # Dashboard data handlers
+│   │   └── dashboardRenderer.ts  # Dashboard HTML rendering
+│   ├── constants.ts       # Shared constants (TTLs, limits, timing values)
 │   ├── project-config.ts  # .butler/project.json discovery (walks up directory tree)
 │   ├── validation.ts
 │   └── index.ts           # Application entry point

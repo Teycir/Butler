@@ -17,6 +17,7 @@
     "test:langgraph": "tsx tests/langgraph.test.ts",
     "test:orchestrator": "tsx tests/orchestrator.test.ts",
     "status": "tsx src/cli/status.ts",
+    "tui": "tsx src/cli/tui.ts",
     "dashboard": "tsx src/cli/dashboard.ts"
   },
   "keywords": [

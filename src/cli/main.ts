@@ -29,6 +29,7 @@ Commands:
   install       Configure all local AI clients (Claude Desktop, Cursor, etc.)
   init          Interactively initialize a new project config (.butler/project.json)
   status        Check the health and status of active projects
+  tui           Interactive live terminal monitor dashboard
   dashboard     Run the local web dashboard served on http://localhost:7888
   ping          Diagnostics: quick ping check of Butler database & schema status
   doctor        Complete diagnostics: validate local Node, build, DB, and client configs
@@ -401,6 +402,11 @@ async function main() {
       // Remove command word 'status' from process.argv so status.ts receives options directly
       process.argv.splice(2, 1);
       await import('./status.js');
+      break;
+    case 'tui':
+      // Remove command word 'tui' from process.argv so tui.ts receives options directly
+      process.argv.splice(2, 1);
+      await import('./tui.js');
       break;
     case 'dashboard':
       // Remove command word 'dashboard' from process.argv so dashboard.ts receives options directly
