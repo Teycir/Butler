@@ -72,6 +72,12 @@ export const KNOWN_CLIENTS: Record<string, (platform: NodeJS.Platform) => string
   'kilo-code': (p) =>
     path.join(configRoot(p), 'Antigravity', 'User',
       'globalStorage', 'kilocode.kilo-code', 'settings', 'mcp_settings.json'),
+
+  'opencode': (p) =>
+    path.join(configRoot(p), 'opencode', 'mcp.json'),
+
+  'agy': (_) =>
+    path.join(os.homedir(), '.gemini', 'antigravity-cli', 'mcp_config.json'),
 };
 
 // ─── Persisted user selection ─────────────────────────────────────────────────
