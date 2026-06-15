@@ -17,10 +17,9 @@ import { initDatabase, getDatabasePath } from '../db/database.js';
 import {
   getClientConfigs,
   getAllKnownClients,
-  getRegisteredSlugs,
   addClientSlug,
   removeClientSlug,
-  KNOWN_CLIENTS,
+  getReleaseDir,
 } from './clientConfigs.js';
 
 // Resolve directory name in ESM
@@ -71,19 +70,33 @@ function handleClients(subArgs: string[]) {
   const sub = subArgs[0];
 
   if (!sub || sub === 'list') {
-    const registered = new Set(getRegisteredSlugs());
+    const registered = new Map(getClientConfigs().map(c => [c.slug, c.path]));
     const all = getAllKnownClients();
-    console.log('\n📋 Available AI clients (slug → name)\n');
-    for (const { slug, name, path: cfgPath } of all) {
+    const knownSlugs = new Set(all.map(c => c.slug));
+
+    console.log('\n📋 Known AI clients\n');
+    for (const { slug } of all) {
       const tick = registered.has(slug) ? '✅' : '  ';
-      console.log(`  ${tick}  ${slug.padEnd(20)} ${name}`);
+      console.log(`  ${tick}  ${slug}`);
       if (registered.has(slug)) {
-        console.log(`           config → ${cfgPath}`);
+        console.log(`           ${registered.get(slug)}`);
       }
     }
+
+    // Show any custom (unknown slug) entries the user added
+    const customEntries = getClientConfigs().filter(c => !knownSlugs.has(c.slug));
+    if (customEntries.length > 0) {
+      console.log('\n  Custom entries:');
+      for (const { slug, path: entryPath } of customEntries) {
+        console.log(`  ✅  ${slug}`);
+        console.log(`           ${entryPath}`);
+      }
+    }
+
     if (registered.size === 0) {
       console.log('\n  No clients registered yet.');
-      console.log('  Run: butler clients add <slug>\n');
+      console.log('  Run: butler clients add <slug>');
+      console.log('  Or:  butler clients add <my-tool> --path /path/to/mcp.json\n');
     } else {
       console.log(`\n  ${registered.size} client(s) registered. Run \`butler install\` to apply.\n`);
     }
@@ -93,16 +106,18 @@ function handleClients(subArgs: string[]) {
   if (sub === 'add') {
     const slug = subArgs[1];
     if (!slug) {
-      console.error('Usage: butler clients add <slug>');
-      console.error('Run `butler clients list` to see available slugs.');
+      console.error('Usage: butler clients add <slug> [--path /path/to/config.json]');
+      console.error('Run `butler clients list` to see known slugs.');
       process.exit(1);
     }
-    const result = addClientSlug(slug);
+    // Parse optional --path flag
+    const pathFlagIdx = subArgs.indexOf('--path');
+    const customPath = pathFlagIdx !== -1 ? subArgs[pathFlagIdx + 1] : undefined;
+
+    const result = addClientSlug(slug, customPath);
     console.log(result.ok ? `✅ ${result.message}` : `❌ ${result.message}`);
     if (result.ok) {
-      const cfg = KNOWN_CLIENTS[slug](process.platform);
-      console.log(`   config path → ${cfg.path}`);
-      console.log(`   Run \`butler install\` to inject Butler into ${cfg.name}.`);
+      console.log(`   Run \`butler install\` to inject Butler.`);
     }
     return;
   }
@@ -119,50 +134,61 @@ function handleClients(subArgs: string[]) {
   }
 
   console.error(`Unknown subcommand: clients ${sub}`);
-  console.error('Available: list | add <slug> | remove <slug>');
+  console.error('Available: list | add <slug> [--path /path/to/config] | remove <slug>');
   process.exit(1);
 }
 
 async function handleInstall() {
-  console.log('📦 Installing Butler globally/locally...');
-  
-  const releaseDir = path.join(os.homedir(), 'Mcp', 'butler-mcp');
-  console.log(`🚀 Deploying to ${releaseDir}...`);
-  
-  fs.mkdirSync(path.join(releaseDir, 'dist'), { recursive: true });
-  fs.cpSync(path.join(packageRoot, 'dist'), path.join(releaseDir, 'dist'), { recursive: true });
-  fs.cpSync(path.join(packageRoot, 'package.json'), path.join(releaseDir, 'package.json'));
-  
-  const dbPath = path.join(os.homedir(), '.butler', 'butler.db');
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  
-  const entry = path.join(releaseDir, 'dist', 'index.js');
-  
-  function injectMcp(cfgPath: string, name: string, nodeBin: string, entry: string, dbPath: string) {
-    const dir = path.dirname(cfgPath);
-    if (!fs.existsSync(dir)) {
-      console.warn(`  ⚠️  ${path.basename(dir)} not found, skipping`);
-      return;
-    }
-    let data: any = { mcpServers: {} };
-    if (fs.existsSync(cfgPath)) {
-      try {
-        data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      } catch (err) {
-        console.error(`[Butler] Failed to parse config at ${cfgPath}, starting fresh:`, err);
-      }
-    }
-    data.mcpServers = data.mcpServers || {};
-    data.mcpServers[name] = {
-      command: nodeBin,
-      args: [entry],
-      env: { BUTLER_DB_PATH: dbPath }
-    };
-    fs.writeFileSync(cfgPath, JSON.stringify(data, null, 2));
-    console.log(`  → ${cfgPath}`);
+  const releaseDir = getReleaseDir();
+  const mcpDir = path.dirname(releaseDir);
+
+  // ── Step 0: Ensure deployment directory exists ─────────────────────────────
+  if (!fs.existsSync(mcpDir)) {
+    console.log(`📁 Creating ${mcpDir}...`);
+    fs.mkdirSync(mcpDir, { recursive: true });
+  }
+  fs.mkdirSync(releaseDir, { recursive: true });
+
+  // ── Step 1: Build ──────────────────────────────────────────────────────────
+  console.log('🔨 Building from source...');
+  try {
+    // On Windows, npm is a .cmd script so we must use the shell
+    const isWin = process.platform === 'win32';
+    execSync('npm run build', {
+      cwd: packageRoot,
+      stdio: 'inherit',
+      shell: isWin ? 'cmd.exe' : '/bin/sh',
+    });
+  } catch (err) {
+    console.error('\n❌ Build failed. Fix TypeScript errors above and retry.');
+    process.exit(1);
   }
 
+  // ── Step 2: Sync dist/ to deployment dir ──────────────────────────────────
+  console.log(`\n🚀 Syncing to ${releaseDir}...`);
+
+  // Wipe the old dist so deleted files don't linger
+  const releaseDist = path.join(releaseDir, 'dist');
+  if (fs.existsSync(releaseDist)) {
+    fs.rmSync(releaseDist, { recursive: true, force: true });
+  }
+  fs.mkdirSync(releaseDist, { recursive: true });
+
+  // Copy fresh build artefacts
+  fs.cpSync(path.join(packageRoot, 'dist'), releaseDist, { recursive: true });
+  fs.cpSync(path.join(packageRoot, 'package.json'), path.join(releaseDir, 'package.json'));
+  fs.cpSync(path.join(packageRoot, 'tsconfig.json'), path.join(releaseDir, 'tsconfig.json'));
+
+  console.log('  ✅ dist/ synced');
+
+  // ── Step 3: Ensure DB dir exists ──────────────────────────────────────────
+  const dbPath = path.join(os.homedir(), '.butler', 'butler.db');
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  const entry = path.join(releaseDir, 'dist', 'index.js');
   const nodeBin = process.execPath;
+
+  // ── Step 4: Inject into registered AI clients ─────────────────────────────
   const configs = getClientConfigs();
 
   if (configs.length === 0) {
@@ -172,7 +198,31 @@ async function handleInstall() {
     return;
   }
 
-  console.log('\n🔧 Configuring MCP clients...');
+  function injectMcp(cfgPath: string, name: string, nodeBin: string, entry: string, dbPath: string) {
+    const dir = path.dirname(cfgPath);
+    if (!fs.existsSync(dir)) {
+      console.warn(`  ⚠️  Directory not found, skipping: ${dir}`);
+      return;
+    }
+    let data: any = { mcpServers: {} };
+    if (fs.existsSync(cfgPath)) {
+      try {
+        data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      } catch (err) {
+        console.error(`  ⚠️  Failed to parse ${cfgPath}, starting fresh:`, err);
+      }
+    }
+    data.mcpServers = data.mcpServers || {};
+    data.mcpServers[name] = {
+      command: nodeBin,
+      args: [entry],
+      env: { BUTLER_DB_PATH: dbPath }
+    };
+    fs.writeFileSync(cfgPath, JSON.stringify(data, null, 2));
+    console.log(`  ✅ ${cfgPath}`);
+  }
+
+  console.log('\n🔧 Injecting Butler into registered AI clients...');
   for (const cfg of configs) {
     injectMcp(cfg.path, 'butler', nodeBin, entry, dbPath);
   }
@@ -183,9 +233,8 @@ async function handleInstall() {
   console.log('──────────────────────────────────────────────────────────────────\n');
   const snippet = 'On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = "<client>-<4 random chars>", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect.';
   console.log(snippet + '\n');
-  
   console.log('🧪 Verifying setup...');
-  console.log("Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'");
+  console.log("Open any registered client and ask: 'Can you call the butlerping tool?'");
   console.log("Expected response: status: ok, schema_version: 8\n");
 }
 
@@ -272,12 +321,30 @@ function handleDoctor() {
   // Node.js version
   console.log(`✅ Node.js ${process.version} — OK`);
 
-  // Build check
-  const buildExists = fs.existsSync(path.join(packageRoot, 'dist', 'index.js'));
-  if (buildExists) {
-    console.log(`✅ Butler build — OK (dist/index.js exists)`);
+  // Build check (source)
+  const srcBuildExists = fs.existsSync(path.join(packageRoot, 'dist', 'index.js'));
+  if (srcBuildExists) {
+    console.log(`✅ Source build    — OK (${packageRoot}/dist/index.js)`);
   } else {
-    console.log(`❌ Butler build — ERROR (dist/index.js is missing). Run 'npm run build' first.`);
+    console.log(`❌ Source build    — MISSING. Run \`npm run build\` in ${packageRoot}`);
+  }
+
+  // Deployment sync check
+  const releaseDir = getReleaseDir();
+  const deployedEntry = path.join(releaseDir, 'dist', 'index.js');
+  const deployedCliMain = path.join(releaseDir, 'dist', 'cli', 'main.js');
+  const sourceCliMain   = path.join(packageRoot, 'dist', 'cli', 'main.js');
+  if (!fs.existsSync(deployedEntry)) {
+    console.log(`❌ Deployment      — MISSING (${deployedEntry}). Run \`butler install\`.`);
+  } else {
+    // Compare mtime of key file to detect stale deployment
+    const srcMtime    = fs.existsSync(sourceCliMain)   ? fs.statSync(sourceCliMain).mtimeMs   : 0;
+    const deployMtime = fs.existsSync(deployedCliMain) ? fs.statSync(deployedCliMain).mtimeMs : 0;
+    if (srcMtime > deployMtime + 1000) {
+      console.log(`⚠️  Deployment     — STALE (source is newer). Run \`butler install\` to sync.`);
+    } else {
+      console.log(`✅ Deployment      — UP TO DATE (${releaseDir})`);
+    }
   }
 
   // Database check
@@ -304,20 +371,20 @@ function handleDoctor() {
   let repairNeeded = false;
   for (const client of clients) {
     if (!fs.existsSync(client.path)) {
-      console.log(`⚠️  ${client.name} config — NOT FOUND (missing file)`);
+      console.log(`⚠️  ${client.slug} — config NOT FOUND`);
       repairNeeded = true;
       continue;
     }
     try {
       const data = JSON.parse(fs.readFileSync(client.path, 'utf8'));
       if (data.mcpServers && data.mcpServers.butler) {
-        console.log(`✅ ${client.name} config — OK (butler entry found)`);
+        console.log(`✅ ${client.slug} — OK`);
       } else {
-        console.log(`⚠️  ${client.name} config — NOT FOUND (butler entry missing)`);
+        console.log(`⚠️  ${client.slug} — butler entry missing`);
         repairNeeded = true;
       }
     } catch (err: any) {
-      console.log(`❌ ${client.name} config — ERROR (invalid JSON in settings: ${err.message})`);
+      console.log(`❌ ${client.slug} — invalid JSON (${err.message})`);
       repairNeeded = true;
     }
   }

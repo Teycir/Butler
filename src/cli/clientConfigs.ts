@@ -3,142 +3,172 @@ import os from 'os';
 import fs from 'fs';
 
 export interface ClientConfig {
-  name: string;
+  slug: string;
   path: string;
+}
+
+// ─── Platform helpers ─────────────────────────────────────────────────────────
+
+/** %APPDATA% on Windows, with safe fallback to home dir. */
+function appData(): string {
+  return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+}
+
+/**
+ * Standard per-OS config root:
+ *   macOS  → ~/Library/Application Support
+ *   Windows → %APPDATA%
+ *   Linux  → ~/.config
+ */
+function configRoot(p: NodeJS.Platform): string {
+  if (p === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support');
+  if (p === 'win32')  return appData();
+  return path.join(os.homedir(), '.config');
 }
 
 // ─── Registry of all known AI pair-programming tools ─────────────────────────
 // Keyed by a stable slug (used in clients.json).
 
-export const KNOWN_CLIENTS: Record<string, (platform: NodeJS.Platform) => ClientConfig> = {
-  'claude-desktop': (p) => {
-    const home = os.homedir();
-    if (p === 'darwin') return { name: 'Claude Desktop', path: path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json') };
-    if (p === 'win32')  return { name: 'Claude Desktop', path: path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json') };
-    return                     { name: 'Claude Desktop', path: path.join(home, '.config', 'Claude', 'claude_desktop_config.json') };
-  },
-  'claude-code': (_) => ({
-    name: 'Claude Code',
-    path: path.join(os.homedir(), '.claude', 'settings.json'),
-  }),
-  'cursor': (p) => {
-    const home = os.homedir();
-    if (p === 'darwin') return { name: 'Cursor', path: path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'mcp.json') };
-    if (p === 'win32')  return { name: 'Cursor', path: path.join(process.env.APPDATA || '', 'Cursor', 'User', 'mcp.json') };
-    return                     { name: 'Cursor', path: path.join(home, '.config', 'Cursor', 'User', 'mcp.json') };
-  },
-  'vscode': (p) => {
-    const home = os.homedir();
-    if (p === 'darwin') return { name: 'VS Code', path: path.join(home, 'Library', 'Application Support', 'Code', 'User', 'mcp.json') };
-    if (p === 'win32')  return { name: 'VS Code', path: path.join(process.env.APPDATA || '', 'Code', 'User', 'mcp.json') };
-    return                     { name: 'VS Code', path: path.join(home, '.config', 'Code', 'User', 'mcp.json') };
-  },
-  'windsurf': (p) => {
-    const home = os.homedir();
-    const base = p === 'win32' ? (process.env.USERPROFILE || home) : home;
-    return { name: 'Windsurf', path: path.join(base, '.codeium', 'windsurf', 'mcp_config.json') };
-  },
+export const KNOWN_CLIENTS: Record<string, (platform: NodeJS.Platform) => string> = {
+
+  'claude-desktop': (p) =>
+    path.join(configRoot(p), 'Claude', 'claude_desktop_config.json'),
+
+  // Claude Code stores its global settings in ~/.claude/settings.json on all platforms
+  'claude-code': (_) =>
+    path.join(os.homedir(), '.claude', 'settings.json'),
+
+  'cursor': (p) =>
+    path.join(configRoot(p), 'Cursor', 'User', 'mcp.json'),
+
+  'vscode': (p) =>
+    path.join(configRoot(p), 'Code', 'User', 'mcp.json'),
+
+  // Windsurf uses ~/.codeium/windsurf/mcp_config.json on all platforms
+  'windsurf': (_) =>
+    path.join(os.homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
+
   'zed': (p) => {
-    const home = os.homedir();
-    if (p === 'darwin') return { name: 'Zed', path: path.join(home, 'Library', 'Application Support', 'Zed', 'settings.json') };
-    if (p === 'win32')  return { name: 'Zed', path: path.join(process.env.APPDATA || '', 'Zed', 'settings.json') };
-    return                     { name: 'Zed', path: path.join(home, '.config', 'zed', 'settings.json') };
+    if (p === 'win32')  return path.join(appData(), 'Zed', 'settings.json');
+    if (p === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Zed', 'settings.json');
+    return path.join(os.homedir(), '.config', 'zed', 'settings.json');
   },
-  'gemini-cli': (_) => ({
-    name: 'Gemini CLI',
-    path: path.join(os.homedir(), '.gemini', 'settings.json'),
-  }),
-  'cline': (p) => {
-    const home = os.homedir();
-    const rel = path.join('globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
-    if (p === 'darwin') return { name: 'Cline', path: path.join(home, 'Library', 'Application Support', 'Code', 'User', rel) };
-    if (p === 'win32')  return { name: 'Cline', path: path.join(process.env.APPDATA || '', 'Code', 'User', rel) };
-    return                     { name: 'Cline', path: path.join(home, '.config', 'Code', 'User', rel) };
-  },
-  'roo-code': (p) => {
-    const home = os.homedir();
-    const rel = path.join('globalStorage', 'rooveterinaryinc.roo-cline', 'settings', 'mcp_settings.json');
-    if (p === 'darwin') return { name: 'Roo Code', path: path.join(home, 'Library', 'Application Support', 'Code', 'User', rel) };
-    if (p === 'win32')  return { name: 'Roo Code', path: path.join(process.env.APPDATA || '', 'Code', 'User', rel) };
-    return                     { name: 'Roo Code', path: path.join(home, '.config', 'Code', 'User', rel) };
-  },
-  'kiro-cli': (p) => {
-    const home = os.homedir();
-    if (p === 'win32') return { name: 'Kiro CLI', path: path.join(process.env.APPDATA || '', 'kiro-cli', 'mcp.json') };
-    return                    { name: 'Kiro CLI', path: path.join(home, '.config', 'kiro-cli', 'mcp.json') };
-  },
-  'kilo-code': (_) => ({
-    name: 'Kilo Code',
-    path: path.join(
-      os.homedir(),
-      '.config', 'Antigravity', 'User', 'globalStorage',
-      'kilocode.kilo-code', 'settings', 'mcp_settings.json'
-    ),
-  }),
+
+  // Gemini CLI: ~/.gemini/settings.json on all platforms
+  'gemini-cli': (_) =>
+    path.join(os.homedir(), '.gemini', 'settings.json'),
+
+  'cline': (p) =>
+    path.join(configRoot(p), 'Code', 'User',
+      'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json'),
+
+  'roo-code': (p) =>
+    path.join(configRoot(p), 'Code', 'User',
+      'globalStorage', 'rooveterinaryinc.roo-cline', 'settings', 'mcp_settings.json'),
+
+  'kiro-cli': (p) =>
+    path.join(configRoot(p), 'kiro-cli', 'mcp.json'),
+
+  'kilo-code': (p) =>
+    path.join(configRoot(p), 'Antigravity', 'User',
+      'globalStorage', 'kilocode.kilo-code', 'settings', 'mcp_settings.json'),
 };
 
 // ─── Persisted user selection ─────────────────────────────────────────────────
+// Stored as an array of { slug, path } so users can register custom tools
+// (unknown slugs) by providing their own config file path.
+
+interface StoredEntry { slug: string; path: string; }
 
 const CLIENTS_FILE = path.join(os.homedir(), '.butler', 'clients.json');
 
-function readClientSlugs(): string[] {
+function readEntries(): StoredEntry[] {
   try {
     const raw = fs.readFileSync(CLIENTS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as string[];
+    // Support old format (plain string array) by upgrading on the fly
+    if (Array.isArray(parsed)) {
+      if (parsed.length === 0) return [];
+      if (typeof parsed[0] === 'string') {
+        // Old format: resolve paths now and re-save in new format
+        const p = process.platform;
+        const upgraded = (parsed as string[])
+          .filter(slug => KNOWN_CLIENTS[slug])
+          .map(slug => ({ slug, path: KNOWN_CLIENTS[slug](p) }));
+        writeEntries(upgraded);
+        return upgraded;
+      }
+      return parsed as StoredEntry[];
+    }
   } catch {
     // File doesn't exist yet or is malformed — treat as empty
   }
   return [];
 }
 
-function writeClientSlugs(slugs: string[]): void {
+function writeEntries(entries: StoredEntry[]): void {
   fs.mkdirSync(path.dirname(CLIENTS_FILE), { recursive: true });
-  fs.writeFileSync(CLIENTS_FILE, JSON.stringify(slugs, null, 2));
+  fs.writeFileSync(CLIENTS_FILE, JSON.stringify(entries, null, 2));
 }
 
-export function addClientSlug(slug: string): { ok: boolean; message: string } {
-  if (!KNOWN_CLIENTS[slug]) {
-    return { ok: false, message: `Unknown client slug "${slug}". Run \`butler clients list\` to see available options.` };
-  }
-  const slugs = readClientSlugs();
-  if (slugs.includes(slug)) {
+/**
+ * Add a client.
+ * - Known slug, no path:  resolves the path from the registry.
+ * - Known slug + path:    uses the provided path (override).
+ * - Unknown slug + path:  registers a fully custom tool.
+ * - Unknown slug, no path: error.
+ */
+export function addClientSlug(slug: string, customPath?: string): { ok: boolean; message: string } {
+  const entries = readEntries();
+  if (entries.some(e => e.slug === slug)) {
     return { ok: false, message: `"${slug}" is already registered.` };
   }
-  writeClientSlugs([...slugs, slug]);
-  return { ok: true, message: `Added "${slug}".` };
+  let resolvedPath: string;
+  if (customPath) {
+    resolvedPath = customPath;
+  } else if (KNOWN_CLIENTS[slug]) {
+    resolvedPath = KNOWN_CLIENTS[slug](process.platform);
+  } else {
+    return { ok: false, message: `Unknown slug "${slug}". Provide a path with --path to register a custom tool, or run \`butler clients list\` to see known slugs.` };
+  }
+  writeEntries([...entries, { slug, path: resolvedPath }]);
+  return { ok: true, message: `Added "${slug}" → ${resolvedPath}` };
 }
 
 export function removeClientSlug(slug: string): { ok: boolean; message: string } {
-  const slugs = readClientSlugs();
-  if (!slugs.includes(slug)) {
+  const entries = readEntries();
+  if (!entries.some(e => e.slug === slug)) {
     return { ok: false, message: `"${slug}" is not registered.` };
   }
-  writeClientSlugs(slugs.filter(s => s !== slug));
+  writeEntries(entries.filter(e => e.slug !== slug));
   return { ok: true, message: `Removed "${slug}".` };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/** Returns only the clients the user has explicitly opted in to. */
+/** Returns only the clients the user has explicitly registered. */
 export function getClientConfigs(): ClientConfig[] {
-  const slugs = readClientSlugs();
-  const p = process.platform;
-  return slugs
-    .filter(slug => KNOWN_CLIENTS[slug])
-    .map(slug => KNOWN_CLIENTS[slug](p));
+  return readEntries().map(({ slug, path }) => ({ slug, path }));
 }
 
-/** Returns every client known to Butler (for display purposes). */
-export function getAllKnownClients(): Array<{ slug: string } & ClientConfig> {
+/** Returns every client known to Butler (for the `list` display). */
+export function getAllKnownClients(): ClientConfig[] {
   const p = process.platform;
   return Object.entries(KNOWN_CLIENTS).map(([slug, factory]) => ({
     slug,
-    ...factory(p),
+    path: factory(p),
   }));
 }
 
 /** Returns the slugs the user has currently registered. */
 export function getRegisteredSlugs(): string[] {
-  return readClientSlugs();
+  return readEntries().map(e => e.slug);
+}
+
+/**
+ * The deployment directory Butler installs itself into.
+ * <home>/Mcp/butler-mcp — os.homedir() resolves correctly on all platforms.
+ */
+export function getReleaseDir(): string {
+  return path.join(os.homedir(), 'Mcp', 'butler-mcp');
 }
