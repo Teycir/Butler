@@ -157,6 +157,24 @@ Config file locations:
 - **Kiro CLI:** `~/.config/kiro-cli/mcp.json`
 - **Kilo Code:** `~/.config/Antigravity/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json`
 
+**Example: Kiro CLI configuration (`~/.config/kiro-cli/mcp.json`)**
+
+```json
+{
+  "mcpServers": {
+    "butler": {
+      "command": "/home/user/.nvm/versions/node/v20.20.0/bin/node",
+      "args": [
+        "/home/user/Mcp/butler-mcp/dist/index.js"
+      ],
+      "env": {
+        "BUTLER_DB_PATH": "/home/user/.butler/butler.db"
+      }
+    }
+  }
+}
+```
+
 Restart your AI clients and Butler is ready.
 
 ---
