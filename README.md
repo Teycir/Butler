@@ -10,6 +10,7 @@
 
 [![Works with Claude](https://img.shields.io/badge/Works%20with-Claude-orange.svg)](#)
 [![Works with Cursor](https://img.shields.io/badge/Works%20with-Cursor-blue.svg)](#)
+[![Works with LangGraph](https://img.shields.io/badge/Works%20with-LangGraph-brightgreen.svg)](#)
 [![MCP Native](https://img.shields.io/badge/MCP-Native-blueviolet.svg)](#)
 [![No Cloud Required](https://img.shields.io/badge/No%20Cloud-100%25%20Local-green.svg)](#)
 [![Zero Config](https://img.shields.io/badge/Setup-Zero%20Config-brightgreen.svg)](#)
@@ -46,6 +47,8 @@
 
 ### What is Butler?
 Butler is a lightweight, local-first background coordination engine that registers active AI agents (e.g. Claude Desktop, Cursor, custom IDE tools) and maintains a **shared, event-sourced memory space** directly inside your project repository.
+
+**Butler features native [LangGraph](https://github.com/langchain-ai/langgraphjs) integration, providing a built-in SQLite checkpointer to save/restore multi-agent conversation threads and coordinate workflow graphs directly in the project database.**
 
 ### Why does it exist?
 Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process exits, active context (TODOs, architectural constraints, session differences) is completely lost. When multiple agents run concurrently, they operate in silos, generating race conditions and divergent branches. Butler bridges this gap.
