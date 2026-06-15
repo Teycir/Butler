@@ -85,7 +85,7 @@ export function createInitialState(): ProjectState {
 }
 
 // In-memory cache for materialized project states to support high-performance incremental updates
-const projectCache = new Map<string, { state: ProjectState; lastEventId: number; lastSnapshotEventId: number }>();
+const projectCache = new Map<string, { state: ProjectState; lastEventId: number; lastSnapshotEventId: number; lastAccessed: number }>();
 
 export function invalidateProjectCache(projectId: string): void {
   projectCache.delete(projectId);
@@ -103,6 +103,7 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
     state = cached.state;
     startEventId = cached.lastEventId;
     lastSnapshotEventId = cached.lastSnapshotEventId;
+    cached.lastAccessed = Date.now();
   } else {
     const latestSnapshot = getLatestSnapshot(projectId);
     state = createInitialState();
@@ -144,8 +145,17 @@ export function materializeProject(projectId: string, triggerSnapshotCheck = tru
   projectCache.set(projectId, {
     state,
     lastEventId: state.lastEventId,
-    lastSnapshotEventId: lastSnapshotEventId
+    lastSnapshotEventId: lastSnapshotEventId,
+    lastAccessed: Date.now()
   });
+
+  // Evict entries older than 30 minutes (1800000 ms)
+  const now = Date.now();
+  for (const [key, val] of projectCache.entries()) {
+    if (now - val.lastAccessed > 1800000) {
+      projectCache.delete(key);
+    }
+  }
 
   // Evict the oldest entry if the cache size exceeds 100 projects
   if (projectCache.size > 100) {

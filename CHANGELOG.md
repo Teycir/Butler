@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(tests):** Add automated test to enforce `SNAPSHOT_SCHEMA_VERSION` bump discipline on `ProjectState` schema changes.
 - **feat(tests):** Add integration test for `eventsexport` to verify seamless since/until pagination.
 - **docs(readme):** Add documentation for LangGraph checkpointing and multi-agent orchestrator features.
+- **feat(cache):** Implement `lastAccessed` tracking and a 30-minute Time-To-Live (TTL) eviction policy in `projectCache` to prevent unbounded memory retention.
 
 ### Fixed
 - **fix(sync):** Wrap `synccontext` claim transfer, timeline alignment, and broadcasts in a database transaction to ensure atomic operations.
@@ -20,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed & Refactored
 - **refactor(format):** Remove duplicate local formatting code in `context.ts` and `memory.tools.ts` by importing common formatting utilities (`formatAge`, `formatRecencyDays`, `formatTimestamp`) from `lib/format.ts`.
+
+### Chores & Maintenance
+- **chore(package):** Fill empty `author` field in `package.json` with `"Teycir Ben Soltane <teycir@pxdmail.net>"`.
 
 ## [1.0.0] - 2026-06-10
 

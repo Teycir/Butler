@@ -20,7 +20,7 @@
     "agent-coordination",
     "memory"
   ],
-  "author": "",
+  "author": "Teycir Ben Soltane <teycir@pxdmail.net>",
   "license": "ISC",
   "dependencies": {
     "@langchain/core": "^1.1.49",
