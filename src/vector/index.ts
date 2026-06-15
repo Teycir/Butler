@@ -141,11 +141,12 @@ export function searchMemories(
   
   if (skipEmbedding) {
     const db = getDb();
+    const FTS5_RESERVED = new Set(['and', 'or', 'not', 'near']);
     const keywords = query
       .toLowerCase()
       .replace(/[^\w\s]/g, '')
       .split(/\s+/)
-      .filter(w => w.length >= 3)
+      .filter(w => w.length >= 3 && !FTS5_RESERVED.has(w))
       .slice(0, 5); // limit query parameters to prevent SQL complexity
 
     if (keywords.length > 0) {
@@ -180,7 +181,8 @@ export function searchMemories(
 
     // If no keywords matched or query was too short, fallback to general getMemories
     if (memories.length === 0) {
-      memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, true);
+      const fallbackLimit = 100;
+      memories = getMemories(projectId, fallbackLimit, true);
     }
   } else {
     memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, false);
@@ -258,7 +260,13 @@ export function searchMemories(
       projectRelevance = 1.0;
     }
 
-    // Combined formula: similarity*0.5 + recency*0.2 + importance*0.2 + projectRelevance*0.1
+    /**
+     * Combined search score weighting:
+     * - Relevance (50%): Cosine similarity or TF-IDF score represents content match strength.
+     * - Recency (20%): exponential decay (half-life of ~29 days, lambda = 0.001) rewards fresh context.
+     * - Importance (20%): agent-assigned significance weight (0.0 to 1.0) prioritizes key decisions/rules.
+     * - Project Intent Relevance (10%): query intent match boosts categories the agent is asking for.
+     */
     const combinedScore = (rel * 0.5) + (rec * 0.2) + (imp * 0.2) + (projectRelevance * 0.1);
 
     return {

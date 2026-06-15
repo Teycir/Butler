@@ -151,12 +151,14 @@ export async function handleReadResource(uri: string) {
         let metadataObj: any = null;
         try {
           if (r.checkpoint) checkpointObj = JSON.parse(r.checkpoint.toString('utf-8'));
-        } catch {
+        } catch (err) {
+          console.error(`[Butler] Failed to parse checkpoint JSON for thread_id ${r.thread_id}:`, err);
           checkpointObj = r.checkpoint ? r.checkpoint.toString('hex') : null;
         }
         try {
           if (r.metadata) metadataObj = JSON.parse(r.metadata.toString('utf-8'));
-        } catch {
+        } catch (err) {
+          console.error(`[Butler] Failed to parse metadata JSON for thread_id ${r.thread_id}:`, err);
           metadataObj = r.metadata ? r.metadata.toString('hex') : null;
         }
         return {

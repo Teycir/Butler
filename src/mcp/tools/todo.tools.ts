@@ -95,20 +95,24 @@ export async function handleTodoTool(
   switch (name) {
     case 'todoadd': {
       validateSession(projectId, String(args.session_id));
-      const nextId = getNextSequenceValue(projectId, 'todo');
       const title = sanitizeTitle(String(args.title));
       const priority = (args.priority as 'low' | 'medium' | 'high' | undefined) ?? 'medium';
 
-      const event = appendEvent(projectId, String(args.session_id), 'TODO_CREATED', {
-        todo_id: nextId, title, priority
-      });
-      updateLastEventSeen(String(args.session_id), event.id);
+      const { nextId, eventId } = getDb().transaction(() => {
+        const nextId = getNextSequenceValue(projectId, 'todo');
+        const ev = appendEvent(projectId, String(args.session_id), 'TODO_CREATED', {
+          todo_id: nextId, title, priority
+        });
+        updateLastEventSeen(String(args.session_id), ev.id);
+        return { nextId, eventId: ev.id };
+      })();
+
       invalidateProjectCache(projectId);
 
       return {
         content: [{
           type: 'text',
-          text: `Shared TODO successfully created! [ID: ${nextId}] "${title}" (Event ID: ${event.id})`
+          text: `Shared TODO successfully created! [ID: ${nextId}] "${title}" (Event ID: ${eventId})`
         }]
       };
     }

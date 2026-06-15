@@ -78,8 +78,8 @@ async function handleInstall() {
     if (fs.existsSync(cfgPath)) {
       try {
         data = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      } catch {
-        // Ignored: override or start fresh
+      } catch (err) {
+        console.error(`[Butler] Failed to parse config at ${cfgPath}, starting fresh:`, err);
       }
     }
     data.mcpServers = data.mcpServers || {};
@@ -212,19 +212,25 @@ function handlePing() {
   try {
     const stats = fs.statSync(dbPath);
     db_size_kb = Math.round(stats.size / 1024);
-  } catch {}
+  } catch (err) {
+    console.error(`[Butler] Failed to stat database file at ${dbPath}:`, err);
+  }
   
   let schema_version = 0;
   try {
     const migRow = db.prepare("SELECT MAX(version) as max_v FROM butler_migrations").get() as any;
     if (migRow) schema_version = Number(migRow.max_v);
-  } catch {}
+  } catch (err) {
+    console.error('[Butler] Failed to query migrations table:', err);
+  }
   
   let project_count = 0;
   try {
     const projRow = db.prepare("SELECT COUNT(*) as c FROM projects").get() as any;
     if (projRow) project_count = Number(projRow.c);
-  } catch {}
+  } catch (err) {
+    console.error('[Butler] Failed to query projects count:', err);
+  }
   
   console.log(JSON.stringify({
     status: 'ok',
@@ -340,8 +346,8 @@ function handleDoctor() {
         console.log(`⚠️  ${client.name} config — NOT FOUND (butler entry missing)`);
         repairNeeded = true;
       }
-    } catch {
-      console.log(`❌ ${client.name} config — ERROR (invalid JSON in settings)`);
+    } catch (err: any) {
+      console.log(`❌ ${client.name} config — ERROR (invalid JSON in settings: ${err.message})`);
       repairNeeded = true;
     }
   }
@@ -358,7 +364,9 @@ function handleAutocompleteProjects() {
   try {
     const projects = db.prepare('SELECT id FROM projects').all() as any[];
     console.log(projects.map(p => p.id).join(' '));
-  } catch {}
+  } catch (err) {
+    console.error('[Butler] Failed to query projects list for autocomplete:', err);
+  }
   db.close();
 }
 

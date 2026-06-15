@@ -122,7 +122,8 @@ function loadState(snapshot: SnapshotRow | null): ProjectState {
   if (!snapshot) return {};
   try {
     return JSON.parse(snapshot.snapshot_json) as ProjectState;
-  } catch {
+  } catch (err) {
+    console.error(`[Butler] Failed to parse snapshot JSON for event ID ${snapshot.event_id}:`, err);
     return {};
   }
 }
@@ -261,7 +262,11 @@ function printProjectStatus(
     console.log(`\n${colors.bold}🤝  RECENT HANDOFFS (last 3)${colors.reset}`);
     for (const ev of handoffEvents) {
       let payload: any = {};
-      try { payload = JSON.parse(ev.payload); } catch {}
+      try {
+        payload = JSON.parse(ev.payload);
+      } catch (err) {
+        console.error(`[Butler] Failed to parse handoff payload for event ID ${ev.id}:`, err);
+      }
       const handoff = ev.type === 'HANDOFF_CREATED' ? payload : payload.handoff;
       const summary = handoff?.summary ? truncate(handoff.summary, 72) : '(no summary)';
       const src     = ev.type === 'HANDOFF_CREATED' ? 'agent' : 'system';
@@ -274,7 +279,11 @@ function printProjectStatus(
   if (handoffEvents.length > 0) {
     const ev = handoffEvents[0];
     let payload: any = {};
-    try { payload = JSON.parse(ev.payload); } catch {}
+    try {
+      payload = JSON.parse(ev.payload);
+    } catch (err) {
+      console.error(`[Butler] Failed to parse handoff payload for quality scoring:`, err);
+    }
     const handoff = ev.type === 'HANDOFF_CREATED' ? payload : payload.handoff;
     const summary = handoff?.summary || '';
     if (summary) {
@@ -321,7 +330,11 @@ function buildJsonOutput(db: Database.Database, projects: ProjectRow[], nowTs: n
       broadcasts:   state.broadcasts ?? [],
       handoffs:     handoffs.map(ev => {
         let payload: any = {};
-        try { payload = JSON.parse(ev.payload); } catch {}
+        try {
+          payload = JSON.parse(ev.payload);
+        } catch (err) {
+          console.error(`[Butler] Failed to parse event payload for event ID ${ev.id}:`, err);
+        }
         return { session_id: ev.session_id, type: ev.type, created_at: ev.created_at, payload };
       }),
       event_log: {

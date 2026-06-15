@@ -3,7 +3,7 @@ import { now as getCurrentTimestamp, MEMORY_RELEVANCE_THRESHOLD } from '../../co
 import { materializeProject } from '../../events/materializer.js';
 import { getActiveSessions, getContextStaleness, computeHandoffQualityScore } from '../../coordinator/lifecycle.js';
 import { searchMemories } from '../../vector/index.js';
-import { sanitizeMarkdown } from '../../validation.js';
+import { escapeMarkdownForRender } from '../../validation.js';
 import { formatAge, formatRecencyDays, formatTimestamp } from '../../lib/format.js';
 
 // Cache for context rendering to prevent redundant materialize + TF-IDF queries
@@ -144,16 +144,16 @@ function renderContextMarkdown(
         ? ` — Quality: ${qualityScore < 0.4 ? 'low ⚠️' : qualityScore >= 0.8 ? 'excellent ✅' : 'satisfactory'}`
         : '';
       md += `### ${sourceLabel} Handoff from ${h.session_id} (${formatTimestamp(h.timestamp)})${qualityStr}\n`;
-      md += `> ${sanitizeMarkdown(h.summary).replace(/\n/g, '\n> ')}\n`;
+      md += `> ${escapeMarkdownForRender(h.summary).replace(/\n/g, '\n> ')}\n`;
       if (h.payload?.diff_summary && h.payload.diff_summary !== h.summary) {
         md += `\n**Changes this session:**\n`;
-        for (const line of h.payload.diff_summary.split('\n')) md += `> ${sanitizeMarkdown(line)}\n`;
+        for (const line of h.payload.diff_summary.split('\n')) md += `> ${escapeMarkdownForRender(line)}\n`;
       }
-      if (h.payload?.completed_todos?.length > 0) md += `**Completed:** ${h.payload.completed_todos.map(sanitizeMarkdown).join(', ')}\n`;
-      if (h.payload?.pending_todos?.length > 0) md += `**Pending:** ${h.payload.pending_todos.map(sanitizeMarkdown).join(', ')}\n`;
-      if (h.payload?.recent_decisions?.length > 0) md += `**Decisions:** ${h.payload.recent_decisions.map(sanitizeMarkdown).join(', ')}\n`;
-      if (h.payload?.rules_added?.length > 0) md += `**Rules Added:** ${h.payload.rules_added.map(sanitizeMarkdown).join(', ')}\n`;
-      if (h.payload?.wiki_updated?.length > 0) md += `**Wiki Updated:** ${h.payload.wiki_updated.map(sanitizeMarkdown).join(', ')}\n`;
+      if (h.payload?.completed_todos?.length > 0) md += `**Completed:** ${h.payload.completed_todos.map(escapeMarkdownForRender).join(', ')}\n`;
+      if (h.payload?.pending_todos?.length > 0) md += `**Pending:** ${h.payload.pending_todos.map(escapeMarkdownForRender).join(', ')}\n`;
+      if (h.payload?.recent_decisions?.length > 0) md += `**Decisions:** ${h.payload.recent_decisions.map(escapeMarkdownForRender).join(', ')}\n`;
+      if (h.payload?.rules_added?.length > 0) md += `**Rules Added:** ${h.payload.rules_added.map(escapeMarkdownForRender).join(', ')}\n`;
+      if (h.payload?.wiki_updated?.length > 0) md += `**Wiki Updated:** ${h.payload.wiki_updated.map(escapeMarkdownForRender).join(', ')}\n`;
       md += `\n`;
     }
   }
@@ -168,13 +168,13 @@ function renderContextMarkdown(
     for (const t of pending) {
       const priorityEmoji = t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '🟢';
       const claimNote = t.claimed_by ? ` 🔒 claimed by \`${t.claimed_by}\`` : '';
-      md += `- [ ] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version}${claimNote})\n`;
+      md += `- [ ] [ID ${t.id}] **${escapeMarkdownForRender(t.title)}** (Priority: ${priorityEmoji} ${t.priority}, Version: ${t.version}${claimNote})\n`;
     }
   }
   if (completed.length > 0) {
     md += `\n**Completed Tasks:**\n`;
     for (const t of completed.slice(-5)) {
-      md += `- [x] [ID ${t.id}] **${sanitizeMarkdown(t.title)}** (Version: ${t.version})\n`;
+      md += `- [x] [ID ${t.id}] **${escapeMarkdownForRender(t.title)}** (Version: ${t.version})\n`;
     }
     if (completed.length > 5) {
       md += `\n_...and ${completed.length - 5} more completed task(s)._\n`;
@@ -188,7 +188,7 @@ function renderContextMarkdown(
     md += `- No active project coding guidelines. Add one with \`ruleadd\`!\n`;
   } else {
     for (const rule of rulesList) {
-      md += `- [${rule.id}] ${sanitizeMarkdown(rule.content)}\n`;
+      md += `- [${rule.id}] ${escapeMarkdownForRender(rule.content)}\n`;
     }
   }
   md += `\n`;
@@ -198,9 +198,9 @@ function renderContextMarkdown(
     md += `- No formal design decisions recorded yet.\n`;
   } else {
     for (const d of decisions) {
-      md += `### Decision: ${sanitizeMarkdown(d.title)} (ID: ${d.id})\n`;
-      md += `**Context:** ${sanitizeMarkdown(d.context)}\n`;
-      md += `**Outcome/Decision:** ${sanitizeMarkdown(d.decision)}\n\n`;
+      md += `### Decision: ${escapeMarkdownForRender(d.title)} (ID: ${d.id})\n`;
+      md += `**Context:** ${escapeMarkdownForRender(d.context)}\n`;
+      md += `**Outcome/Decision:** ${escapeMarkdownForRender(d.decision)}\n\n`;
     }
   }
 
@@ -209,7 +209,7 @@ function renderContextMarkdown(
     md += `- Wiki is currently empty.\n`;
   } else {
     for (const page of wiki) {
-      md += `### Topic: ${sanitizeMarkdown(page.topic)}\n${sanitizeMarkdown(page.content)}\n\n`;
+      md += `### Topic: ${escapeMarkdownForRender(page.topic)}\n${escapeMarkdownForRender(page.content)}\n\n`;
     }
   }
 
@@ -219,7 +219,7 @@ function renderContextMarkdown(
     for (const r of relevantMemories) {
       const typeLabel = r.memory.type.charAt(0).toUpperCase() + r.memory.type.slice(1);
       const recencyStr = formatRecencyDays(r.memory.created_at);
-      md += `- **[${typeLabel}]** ${sanitizeMarkdown(r.memory.content)} _(importance: ${r.memory.importance.toFixed(1)}, ${recencyStr})_\n`;
+      md += `- **[${typeLabel}]** ${escapeMarkdownForRender(r.memory.content)} _(importance: ${r.memory.importance.toFixed(1)}, ${recencyStr})_\n`;
     }
     md += `\n`;
   }
@@ -242,7 +242,7 @@ function renderContextMarkdown(
   if (recentMessages.length > 0) {
     md += `\n## 📬 Direct Messages\n`;
     for (const m of recentMessages) {
-      md += `- **To \`${m.to_session_id}\`** from \`${m.from_session_id}\` (${formatTimestamp(m.sent_at)}): ${sanitizeMarkdown(m.content)}\n`;
+      md += `- **To \`${m.to_session_id}\`** from \`${m.from_session_id}\` (${formatTimestamp(m.sent_at)}): ${escapeMarkdownForRender(m.content)}\n`;
     }
     md += `\n`;
   }
@@ -252,7 +252,7 @@ function renderContextMarkdown(
   if (recentBroadcasts.length > 0) {
     md += `\n## 📢 Broadcasts\n`;
     for (const b of recentBroadcasts) {
-      md += `- **\`${b.from_session_id}\`** (${formatTimestamp(b.sent_at)}): ${sanitizeMarkdown(b.content)}\n`;
+      md += `- **\`${b.from_session_id}\`** (${formatTimestamp(b.sent_at)}): ${escapeMarkdownForRender(b.content)}\n`;
     }
     md += `\n`;
   }

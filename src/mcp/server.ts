@@ -21,6 +21,9 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -62,6 +65,20 @@ const SESSION_LIFECYCLE_TOOLS = new Set(['sessionregister', 'sessionheartbeat', 
 // ButlerMcpServer
 // ---------------------------------------------------------------------------
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function getVersion(): string {
+  try {
+    const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version || '1.2.0';
+  } catch (err) {
+    console.error('[Butler] Failed to read version from package.json, falling back to default:', err);
+    return '1.2.0';
+  }
+}
+
 export class ButlerMcpServer {
   private server: Server;
 
@@ -71,7 +88,7 @@ export class ButlerMcpServer {
     // This is appropriate for local stdio transport where the security boundary
     // is the user's machine. Project IDs and session IDs are the only identifiers.
     this.server = new Server(
-      { name: 'butler-mcp', version: '1.0.0' },
+      { name: 'butler-mcp', version: getVersion() },
       {
         capabilities: { resources: {}, tools: {} },
         instructions: SERVER_INSTRUCTIONS

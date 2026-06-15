@@ -86,12 +86,22 @@ export function createInitialState(): ProjectState {
   };
 }
 
+import { registerCloseCallback } from '../db/database.js';
+
 // In-memory cache for materialized project states to support high-performance incremental updates
 const projectCache = new Map<string, { state: ProjectState; lastEventId: number; lastSnapshotEventId: number; lastAccessed: number }>();
 
 export function invalidateProjectCache(projectId: string): void {
   projectCache.delete(projectId);
 }
+
+export function invalidateAllCaches(): void {
+  projectCache.clear();
+}
+
+registerCloseCallback(() => {
+  projectCache.clear();
+});
 
 
 

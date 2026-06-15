@@ -76,19 +76,25 @@ export async function handleObservabilityTool(
     try {
       const stats = fs.statSync(dbPath);
       db_size_kb = Math.round(stats.size / 1024);
-    } catch {}
+    } catch (err) {
+      console.error('[Butler] Failed to stat database file:', err);
+    }
 
     let schema_version = 0;
     try {
       const migRow = db.prepare('SELECT MAX(version) as max_v FROM butler_migrations').get() as any;
       if (migRow) schema_version = Number(migRow.max_v);
-    } catch {}
+    } catch (err) {
+      console.error('[Butler] Failed to query migrations table:', err);
+    }
 
     let project_count = 0;
     try {
       const projRow = db.prepare('SELECT COUNT(*) as c FROM projects').get() as any;
       if (projRow) project_count = Number(projRow.c);
-    } catch {}
+    } catch (err) {
+      console.error('[Butler] Failed to query projects count:', err);
+    }
 
     const uptime_seconds = Math.floor(Date.now() / 1000) - SERVER_START_TIME;
 
@@ -148,8 +154,12 @@ export async function handleObservabilityTool(
   // Parse payload JSON for richer output; fall back to raw string on error
   const events = rows.map(row => {
     let payload: any;
-    try { payload = JSON.parse(row.payload); }
-    catch { payload = row.payload; }
+    try {
+      payload = JSON.parse(row.payload);
+    } catch (err) {
+      console.error(`[Butler] Failed to parse event payload for event ID ${row.id}:`, err);
+      payload = row.payload;
+    }
     return {
       id:         row.id,
       project_id: projectId,

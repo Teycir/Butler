@@ -22,8 +22,9 @@ export function findProjectConfig(startDir: string = process.cwd()): ProjectConf
         if (parsed.project_id && typeof parsed.project_id === 'string') {
           return { project_id: parsed.project_id, description: parsed.description };
         }
-      } catch {
-        // Malformed JSON — keep searching upward
+      } catch (err) {
+        console.error(`[Butler] Malformed project config at ${cfgPath}:`, err);
+        // keep searching upward
       }
     }
     const parent = path.dirname(dir);

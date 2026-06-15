@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { initDatabase, closeDatabase, sha256hex } from '../src/db/database.js';
-import { appendEvent, getNextSequenceValue } from '../src/events/store.js';
+import { appendEvent, getNextSequenceValue, createSnapshot } from '../src/events/store.js';
 import { materializeProject, invalidateProjectCache, createInitialState } from '../src/events/materializer.js';
 import {
   registerSession,
@@ -14,7 +14,7 @@ import {
   stopLifecycleMonitor,
 } from '../src/coordinator/lifecycle.js';
 import { addMemory, deleteMemory, searchMemories, getMemories } from '../src/vector/index.js';
-import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle, sanitizeMarkdown } from '../src/validation.js';
+import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle, escapeMarkdownForRender } from '../src/validation.js';
 import { getDb } from '../src/db/database.js';
 import { SNAPSHOT_SCHEMA_VERSION, now as getCurrentTimestamp } from '../src/constants.js';
 import { handleCoordinationTool } from '../src/mcp/tools/coordination.tools.js';
@@ -1035,57 +1035,57 @@ async function runTests() {
   });
 
   // =========================================================================
-  // 19. PROMPT INJECTION SANITIZATION — sanitizeMarkdown
+  // 19. PROMPT INJECTION SANITIZATION — escapeMarkdownForRender
   // =========================================================================
   console.log('\n──────────────────────────────────────────');
   console.log('19. Prompt Injection Sanitization');
   console.log('──────────────────────────────────────────');
 
-  await test('sanitizeMarkdown escapes header markers', () => {
-    const result = sanitizeMarkdown('# Injected Header');
+  await test('escapeMarkdownForRender escapes header markers', () => {
+    const result = escapeMarkdownForRender('# Injected Header');
     assert(!result.startsWith('#'), 'Leading # should be escaped');
     assert(result.includes('\\#'), 'Should contain escaped #');
   });
 
-  await test('sanitizeMarkdown escapes backticks', () => {
-    const result = sanitizeMarkdown('```js\nconsole.log("pwned")\n```');
+  await test('escapeMarkdownForRender escapes backticks', () => {
+    const result = escapeMarkdownForRender('```js\nconsole.log("pwned")\n```');
     assert(!result.includes('```'), 'Triple backticks should be escaped');
     assert(result.includes('\\`'), 'Should contain escaped backtick');
   });
 
-  await test('sanitizeMarkdown escapes blockquote markers', () => {
-    const result = sanitizeMarkdown('> Injected blockquote');
+  await test('escapeMarkdownForRender escapes blockquote markers', () => {
+    const result = escapeMarkdownForRender('> Injected blockquote');
     assert(!result.startsWith('>'), 'Leading > should be escaped');
     assert(result.includes('\\>'), 'Should contain escaped >');
   });
 
-  await test('sanitizeMarkdown escapes bold/italic markers', () => {
-    const result = sanitizeMarkdown('**bold** and _italic_');
+  await test('escapeMarkdownForRender escapes bold/italic markers', () => {
+    const result = escapeMarkdownForRender('**bold** and _italic_');
     assert(result.includes('\\*\\*'), 'Bold markers should be escaped');
     assert(result.includes('\\_'), 'Italic markers should be escaped');
   });
 
-  await test('sanitizeMarkdown escapes link brackets', () => {
-    const result = sanitizeMarkdown('[click me](http://evil.com)');
+  await test('escapeMarkdownForRender escapes link brackets', () => {
+    const result = escapeMarkdownForRender('[click me](http://evil.com)');
     assert(result.includes('\\['), 'Opening bracket should be escaped');
     assert(result.includes('\\]'), 'Closing bracket should be escaped');
   });
 
-  await test('sanitizeMarkdown preserves newlines', () => {
-    const result = sanitizeMarkdown('line one\nline two');
+  await test('escapeMarkdownForRender preserves newlines', () => {
+    const result = escapeMarkdownForRender('line one\nline two');
     assert(result.includes('\n'), 'Newlines should be preserved');
     assert(result.includes('line one'), 'Content before newline preserved');
     assert(result.includes('line two'), 'Content after newline preserved');
   });
 
-  await test('sanitizeMarkdown is idempotent on plain text', () => {
+  await test('escapeMarkdownForRender is idempotent on plain text', () => {
     const plain = 'plain text with no special chars 123';
-    const result = sanitizeMarkdown(plain);
+    const result = escapeMarkdownForRender(plain);
     assert(result === plain, 'Plain text should be unchanged');
   });
 
-  await test('sanitizeMarkdown handles empty string', () => {
-    const result = sanitizeMarkdown('');
+  await test('escapeMarkdownForRender handles empty string', () => {
+    const result = escapeMarkdownForRender('');
     assert(result === '', 'Empty string should remain empty');
   });
 
@@ -1765,52 +1765,52 @@ async function runTests() {
   // 19. SANITIZE MARKDOWN — escape and injection resistance
   // =========================================================================
   console.log('\n──────────────────────────────────────────');
-  console.log('19. sanitizeMarkdown');
+  console.log('19. escapeMarkdownForRender');
   console.log('──────────────────────────────────────────');
 
-  await test('sanitizeMarkdown escapes heading hashes', () => {
-    assert(sanitizeMarkdown('# Header') === '\\# Header', 'Leading # must be escaped');
-    assert(sanitizeMarkdown('## Sub') === '\\#\\# Sub', 'Multiple ## must all be escaped');
+  await test('escapeMarkdownForRender escapes heading hashes', () => {
+    assert(escapeMarkdownForRender('# Header') === '\\# Header', 'Leading # must be escaped');
+    assert(escapeMarkdownForRender('## Sub') === '\\#\\# Sub', 'Multiple ## must all be escaped');
   });
 
-  await test('sanitizeMarkdown escapes bold/italic asterisks', () => {
-    const result = sanitizeMarkdown('**bold**');
+  await test('escapeMarkdownForRender escapes bold/italic asterisks', () => {
+    const result = escapeMarkdownForRender('**bold**');
     assert(result === '\\*\\*bold\\*\\*', `Expected \\*\\*bold\\*\\*, got: ${result}`);
   });
 
-  await test('sanitizeMarkdown escapes backticks (inline code and code fences)', () => {
-    assert(sanitizeMarkdown('`code`') === '\\`code\\`', 'Backticks must be escaped');
-    assert(sanitizeMarkdown('```fence```') === '\\`\\`\\`fence\\`\\`\\`', 'Triple backticks must be escaped');
+  await test('escapeMarkdownForRender escapes backticks (inline code and code fences)', () => {
+    assert(escapeMarkdownForRender('`code`') === '\\`code\\`', 'Backticks must be escaped');
+    assert(escapeMarkdownForRender('```fence```') === '\\`\\`\\`fence\\`\\`\\`', 'Triple backticks must be escaped');
   });
 
-  await test('sanitizeMarkdown escapes underscores', () => {
-    assert(sanitizeMarkdown('_italic_') === '\\_italic\\_', 'Underscores must be escaped');
+  await test('escapeMarkdownForRender escapes underscores', () => {
+    assert(escapeMarkdownForRender('_italic_') === '\\_italic\\_', 'Underscores must be escaped');
   });
 
-  await test('sanitizeMarkdown escapes square brackets and pipes', () => {
+  await test('escapeMarkdownForRender escapes square brackets and pipes', () => {
     const link = '[link](url)';
-    const escaped = sanitizeMarkdown(link);
+    const escaped = escapeMarkdownForRender(link);
     assert(!escaped.includes('[link]'), `Unescaped [link] found in: ${escaped}`);
     const pipe = 'a | b';
-    const escapedPipe = sanitizeMarkdown(pipe);
+    const escapedPipe = escapeMarkdownForRender(pipe);
     assert(escapedPipe.includes('\\|'), `Pipe not escaped in: ${escapedPipe}`);
   });
 
-  await test('sanitizeMarkdown preserves newlines (needed for blockquote rendering)', () => {
+  await test('escapeMarkdownForRender preserves newlines (needed for blockquote rendering)', () => {
     const input = 'line1\nline2\nline3';
-    const result = sanitizeMarkdown(input);
+    const result = escapeMarkdownForRender(input);
     assert(result.includes('\n'), 'Newlines must be preserved for blockquote line iteration');
     assert(result.split('\n').length === 3, 'Three lines should remain after sanitization');
   });
 
-  await test('sanitizeMarkdown is idempotent on plain text', () => {
+  await test('escapeMarkdownForRender is idempotent on plain text', () => {
     const plain = 'no special chars here';
-    assert(sanitizeMarkdown(plain) === plain, 'Plain text should pass through unchanged');
+    assert(escapeMarkdownForRender(plain) === plain, 'Plain text should pass through unchanged');
   });
 
-  await test('sanitizeMarkdown blocks injection from TODO title with malicious markdown', () => {
+  await test('escapeMarkdownForRender blocks injection from TODO title with malicious markdown', () => {
     const malicious = '# Injected\n```\ncode fence\n```';
-    const rendered = sanitizeMarkdown(malicious);
+    const rendered = escapeMarkdownForRender(malicious);
     assert(!rendered.match(/^#\s/m), 'Raw heading must not appear after sanitization');
     assert(!rendered.includes('```'), 'Raw code fence must not appear after sanitization');
   });
@@ -1842,22 +1842,22 @@ async function runTests() {
       timestamp: Math.floor(Date.now() / 1000)
     });
 
-    // The context resource renders handoff payloads through sanitizeMarkdown.
-    // We verify it by calling sanitizeMarkdown on each field directly
+    // The context resource renders handoff payloads through escapeMarkdownForRender.
+    // We verify it by calling escapeMarkdownForRender on each field directly
     // (same path as renderContextMarkdown in resources.ts).
     const state = materializeProject(PROJECT_INJ, false);
     const handoff = state.handoffs[state.handoffs.length - 1];
     assert(handoff !== undefined, 'Handoff must exist in state');
 
-    const sanitizedTodo = sanitizeMarkdown(handoff.payload.completed_todos[0]);
+    const sanitizedTodo = escapeMarkdownForRender(handoff.payload.completed_todos[0]);
     assert(!sanitizedTodo.match(/^#/m), 'Heading injection must be escaped in completed_todos');
     assert(!sanitizedTodo.includes('```'), 'Code fence injection must be escaped in completed_todos');
 
-    const sanitizedDiffLine = sanitizeMarkdown(handoff.payload.diff_summary.split('\n')[0]);
+    const sanitizedDiffLine = escapeMarkdownForRender(handoff.payload.diff_summary.split('\n')[0]);
     assert(!sanitizedDiffLine.match(/^#/), 'Heading injection must be escaped in diff_summary');
   });
 
-  await test('Malicious TODO title is sanitized via sanitizeMarkdown before markdown render', () => {
+  await test('Malicious TODO title is sanitized via escapeMarkdownForRender before markdown render', () => {
     const PROJECT_INJ2 = 'project-inject-test2';
     const SESS_INJ2    = 'inject-sess2';
     const db = getDb();
@@ -1875,10 +1875,10 @@ async function runTests() {
     const todo    = state.todos[todoId];
     assert(todo !== undefined, 'TODO must exist in materialized state');
 
-    // renderContextMarkdown calls sanitizeMarkdown(t.title) before interpolation
-    const rendered = sanitizeMarkdown(todo.title);
-    assert(!rendered.match(/^#/m), 'Raw heading must not survive sanitizeMarkdown');
-    assert(!rendered.includes('```'), 'Raw code fence must not survive sanitizeMarkdown');
+    // renderContextMarkdown calls escapeMarkdownForRender(t.title) before interpolation
+    const rendered = escapeMarkdownForRender(todo.title);
+    assert(!rendered.match(/^#/m), 'Raw heading must not survive escapeMarkdownForRender');
+    assert(!rendered.includes('```'), 'Raw code fence must not survive escapeMarkdownForRender');
   });
 
   // =========================================================================
@@ -2043,6 +2043,51 @@ async function runTests() {
     assert(parsed[0].thread_id === threadId, 'Expected matching thread_id');
     assert(parsed[0].checkpoint.channel_values.result === 'success', 'Expected parsed checkpoint object');
     assert(parsed[0].metadata.step === 1, 'Expected parsed metadata object');
+  });
+
+  await test('snapshot creation, cache eviction, and rematerialization round-trip', async () => {
+    const SNAP_PROJECT = 'snap-test-proj';
+    const SNAP_SID = 'snap-sess';
+    registerSession(SNAP_PROJECT, SNAP_SID, 'cursor');
+
+    // 1. Write initial events
+    const id1 = getNextSequenceValue(SNAP_PROJECT, 'todo');
+    appendEvent(SNAP_PROJECT, SNAP_SID, 'TODO_CREATED', { todo_id: id1, title: 'First Task', priority: 'medium' });
+    const id2 = getNextSequenceValue(SNAP_PROJECT, 'todo');
+    appendEvent(SNAP_PROJECT, SNAP_SID, 'TODO_CREATED', { todo_id: id2, title: 'Second Task', priority: 'high' });
+
+    // 2. Materialize state & verify initial contents
+    let state = materializeProject(SNAP_PROJECT, false);
+    assert(state.todos[id1] !== undefined, 'First task should exist in memory');
+    assert(state.todos[id2] !== undefined, 'Second task should exist in memory');
+    assert(state.lastEventId > 0, 'lastEventId should be tracked');
+    const snapEventId = state.lastEventId;
+
+    // 3. Create snapshot in database
+    createSnapshot(SNAP_PROJECT, snapEventId, state);
+
+    // 4. Invalidate the in-memory cache to force loading from database
+    invalidateProjectCache(SNAP_PROJECT);
+
+    // 5. Rematerialize from snapshot & verify state matches exactly
+    const rematerialized = materializeProject(SNAP_PROJECT, false);
+    assert(rematerialized.todos[id1] !== undefined, 'First task should exist after rematerialization');
+    assert(rematerialized.todos[id1].title === 'First Task', 'First task title should match');
+    assert(rematerialized.todos[id2] !== undefined, 'Second task should exist after rematerialization');
+    assert(rematerialized.todos[id2].title === 'Second Task', 'Second task title should match');
+    assert(rematerialized.lastEventId === snapEventId, 'Rematerialized lastEventId should match snapEventId');
+
+    // 6. Write new events on top of the snapshot
+    const id3 = getNextSequenceValue(SNAP_PROJECT, 'todo');
+    appendEvent(SNAP_PROJECT, SNAP_SID, 'TODO_CREATED', { todo_id: id3, title: 'Third Task', priority: 'low' });
+
+    // 7. Verify incremental replay works on top of the loaded snapshot
+    const finalState = materializeProject(SNAP_PROJECT, false);
+    assert(finalState.todos[id1] !== undefined, 'First task should survive incremental replay');
+    assert(finalState.todos[id2] !== undefined, 'Second task should survive incremental replay');
+    assert(finalState.todos[id3] !== undefined, 'Third task (appended) should exist');
+    assert(finalState.todos[id3].title === 'Third Task', 'Third task title should match');
+    assert(finalState.lastEventId > snapEventId, 'Final lastEventId should be advanced');
   });
 
   // =========================================================================

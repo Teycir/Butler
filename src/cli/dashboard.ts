@@ -60,7 +60,10 @@ function collectSnapshot(db: Database.Database, projectId: string) {
   );
   if (!row) return null;
   try { return { data: JSON.parse(row.snapshot_json) as any, event_id: row.event_id }; }
-  catch { return null; }
+  catch (err) {
+    console.error(`[Butler] Failed to parse snapshot JSON for event ID ${row.event_id}:`, err);
+    return null;
+  }
 }
 
 function buildDashboardData(db: Database.Database, nowTs: number) {
@@ -100,7 +103,11 @@ function buildDashboardData(db: Database.Database, nowTs: number) {
       conflicts:  (state.conflicts  ?? []).slice(-10),
       events: recentEvents.map(ev => {
         let payload: any = {};
-        try { payload = JSON.parse(ev.payload); } catch {}
+        try {
+          payload = JSON.parse(ev.payload);
+        } catch (err) {
+          console.error(`[Butler] Failed to parse event payload for event ID ${ev.id}:`, err);
+        }
         return { ...ev, payload };
       }),
       stats: { event_count: eventCount, last_event_at: lastEventAt, snapshot_event_id: snap?.event_id ?? null }
@@ -224,25 +231,25 @@ function eventSummary(ev) {
   }
 }
 
-function completeTodo(projectId, todoId) {
+function completeTodo(projectId, todoId, version) {
   if (!confirm('Mark TODO #' + todoId + ' as completed?')) return;
-  fetch('/api/projects/' + projectId + '/todos/' + todoId + '/complete', { method: 'POST' })
+  fetch('/api/projects/' + projectId + '/todos/' + todoId + '/complete?version=' + version, { method: 'POST' })
     .then(r => r.json())
     .then(res => { if (res.error) alert(res.message); });
 }
 
-function deleteTodo(projectId, todoId) {
+function deleteTodo(projectId, todoId, version) {
   if (!confirm('Delete TODO #' + todoId + '? This cannot be undone.')) return;
-  fetch('/api/projects/' + projectId + '/todos/' + todoId, { method: 'DELETE' })
+  fetch('/api/projects/' + projectId + '/todos/' + todoId + '?version=' + version, { method: 'DELETE' })
     .then(r => r.json())
     .then(res => { if (res.error) alert(res.message); });
 }
 
-function editTodo(projectId, todoId, currentTitle) {
+function editTodo(projectId, todoId, currentTitle, version) {
   const newTitle = prompt('Edit TODO #' + todoId + ' title:', currentTitle);
   if (newTitle === null) return;
   if (!newTitle.trim()) { alert('Title cannot be empty'); return; }
-  fetch('/api/projects/' + projectId + '/todos/' + todoId, {
+  fetch('/api/projects/' + projectId + '/todos/' + todoId + '?version=' + version, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: newTitle })
@@ -288,9 +295,9 @@ function renderProject(proj) {
         .slice(0, 15).map(t => {
           const devButtons = DEV_MODE ? \`
             <div style="display:inline-flex; gap:6px; margin-left:8px;">
-              <button class="btn btn-ok" title="Complete TODO" onclick="completeTodo('\${proj.id}', \${t.id})">✓</button>
-              <button class="btn btn-edit" title="Edit TODO Title" onclick="editTodo('\${proj.id}', \${t.id}, '\${esc(t.title)}')">✎</button>
-              <button class="btn btn-delete" title="Delete TODO" onclick="deleteTodo('\${proj.id}', \${t.id})">✗</button>
+              <button class="btn btn-ok" title="Complete TODO" onclick="completeTodo('\${proj.id}', \${t.id}, \${t.version})">✓</button>
+              <button class="btn btn-edit" title="Edit TODO Title" onclick="editTodo('\${proj.id}', \${t.id}, '\${esc(t.title)}', \${t.version})">✎</button>
+              <button class="btn btn-delete" title="Delete TODO" onclick="deleteTodo('\${proj.id}', \${t.id}, \${t.version})">✗</button>
             </div>\` : '';
           return \`
             <div class="todo">
@@ -382,8 +389,12 @@ const sseClients = new Set<http.ServerResponse>();
 
 function pushToClients(data: string) {
   for (const res of sseClients) {
-    try { res.write(`event: data\ndata: ${data}\n\n`); }
-    catch { sseClients.delete(res); }
+    try {
+      res.write(`event: data\ndata: ${data}\n\n`);
+    } catch (err) {
+      console.warn('[Butler] Failed to push update to SSE client, removing client:', err);
+      sseClients.delete(res);
+    }
   }
 }
 
@@ -391,9 +402,14 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
   const html = renderHtml(dbPath, isDev);
 
   return http.createServer((req, res) => {
+    const urlObj = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+    const pathname = urlObj.pathname;
+
     // ── POST /api/projects/:projectId/todos/:todoId/complete ────────────────
-    const completeMatch = req.url?.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)\/complete$/);
+    const completeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)\/complete$/);
     if (req.method === 'POST' && completeMatch) {
+      const versionQuery = urlObj.searchParams.get('version');
+      const reqVersion = (versionQuery && !isNaN(Number(versionQuery))) ? Number(versionQuery) : null;
       if (!isDev) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
@@ -410,6 +426,9 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
           const todo = state.todos[todoId];
           if (!todo) throw new Error(`TODO ID ${todoId} not found`);
           if (todo.status === 'completed') throw new Error(`TODO ID ${todoId} already completed`);
+          if (reqVersion !== null && todo.version !== reqVersion) {
+            throw new Error(`Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got ${reqVersion}. Please refresh the page.`);
+          }
           
           appendEvent(projectId, 'dashboard', 'TODO_COMPLETED', { todo_id: todoId, version: todo.version });
         })();
@@ -435,14 +454,16 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
     }
 
     // ── DELETE /api/projects/:projectId/todos/:todoId ──────────────────────
-    const deleteMatch = req.url?.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)$/);
-    if (req.method === 'DELETE' && deleteMatch) {
+    const todoIdMatch = pathname.match(/^\/api\/projects\/([^/]+)\/todos\/([^/]+)$/);
+    if (req.method === 'DELETE' && todoIdMatch) {
+      const versionQuery = urlObj.searchParams.get('version');
+      const reqVersion = (versionQuery && !isNaN(Number(versionQuery))) ? Number(versionQuery) : null;
       if (!isDev) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
         return;
       }
-      const [, projectId, todoIdStr] = deleteMatch;
+      const [, projectId, todoIdStr] = todoIdMatch;
       const todoId = Number(todoIdStr);
       try {
         const db = openDb(dbPath, true);
@@ -452,6 +473,9 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
           const state = materializeProject(projectId, false);
           const todo = state.todos[todoId];
           if (!todo) throw new Error(`TODO ID ${todoId} not found`);
+          if (reqVersion !== null && todo.version !== reqVersion) {
+            throw new Error(`Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got ${reqVersion}. Please refresh the page.`);
+          }
           
           appendEvent(projectId, 'dashboard', 'TODO_DELETED', { todo_id: todoId });
         })();
@@ -477,13 +501,15 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
     }
 
     // ── PATCH /api/projects/:projectId/todos/:todoId ───────────────────────
-    if (req.method === 'PATCH' && deleteMatch) {
+    if (req.method === 'PATCH' && todoIdMatch) {
+      const versionQuery = urlObj.searchParams.get('version');
+      const reqVersion = (versionQuery && !isNaN(Number(versionQuery))) ? Number(versionQuery) : null;
       if (!isDev) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'forbidden', message: 'Dashboard is in read-only mode' }));
         return;
       }
-      const [, projectId, todoIdStr] = deleteMatch;
+      const [, projectId, todoIdStr] = todoIdMatch;
       const todoId = Number(todoIdStr);
       
       let body = '';
@@ -503,6 +529,9 @@ function createServer(dbPath: string, isDev: boolean): http.Server {
             const state = materializeProject(projectId, false);
             const todo = state.todos[todoId];
             if (!todo) throw new Error(`TODO ID ${todoId} not found`);
+            if (reqVersion !== null && todo.version !== reqVersion) {
+              throw new Error(`Version mismatch for TODO ID ${todoId}. Expected version ${todo.version}, but got ${reqVersion}. Please refresh the page.`);
+            }
             
             appendEvent(projectId, 'dashboard', 'TODO_UPDATED', { todo_id: todoId, title: title.trim() });
           })();

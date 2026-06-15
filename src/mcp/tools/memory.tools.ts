@@ -183,7 +183,12 @@ export async function handleMemoryTool(
 
         deleteMemory(projectId, memoryId);
 
-        const sessionIdForEvent = args.session_id ? String(args.session_id) : SYSTEM_SESSION_ID;
+        let sessionIdForEvent = SYSTEM_SESSION_ID;
+        if (args.session_id) {
+          sessionIdForEvent = String(args.session_id);
+        } else {
+          console.warn(`[Butler] memorydelete called without session_id for project ${projectId}. Falling back to '${SYSTEM_SESSION_ID}' for audit trail.`);
+        }
         appendEvent(projectId, sessionIdForEvent, 'MEMORY_DELETED', { memory_id: memoryId });
       })();
 

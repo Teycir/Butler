@@ -72,6 +72,6 @@ export function sanitizeTitle(title: string): string {
  * Characters escaped: # ` * _ [ ] > \ |
  * Newlines are preserved (they are structural in markdown blockquotes).
  */
-export function sanitizeMarkdown(str: string): string {
+export function escapeMarkdownForRender(str: string): string {
   return str.replace(/([#`*_[\]>\\|])/g, '\\$1');
 }

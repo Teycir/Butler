@@ -105,10 +105,23 @@ export function getDb(): Database.Database {
   return dbInstance;
 }
 
+const closeCallbacks: (() => void)[] = [];
+
+export function registerCloseCallback(cb: () => void): void {
+  closeCallbacks.push(cb);
+}
+
 export function closeDatabase(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
+  }
+  for (const cb of closeCallbacks) {
+    try {
+      cb();
+    } catch (err) {
+      console.error('[Butler] Error executing database close callback:', err);
+    }
   }
 }
 

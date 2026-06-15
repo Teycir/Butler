@@ -43,13 +43,18 @@ export function generateStructuredHandoff(
     for (const [id, todo] of Object.entries(state.todos)) {
       todoTitleById[Number(id)] = todo.title;
     }
-  } catch {
-    // Non-fatal — fall back to IDs
+  } catch (err) {
+    console.error('[Butler] Failed to materialize project for handoff titles, falling back to IDs:', err);
   }
 
   for (const event of sessionEvents) {
     let payload: any;
-    try { payload = JSON.parse(event.payload); } catch { continue; }
+    try {
+      payload = JSON.parse(event.payload);
+    } catch (err) {
+      console.error(`[Butler] Failed to parse payload for event ID ${event.id} during handoff, skipping:`, err);
+      continue;
+    }
 
     switch (event.type) {
       case 'TODO_COMPLETED': {

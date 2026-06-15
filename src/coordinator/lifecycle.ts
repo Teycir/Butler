@@ -179,9 +179,12 @@ export function gracefulDisconnect(projectId: string, sessionId: string): void {
 
   const db = getDb();
   const now = getCurrentTimestamp();
-
   const handoff = generateStructuredHandoff(projectId, sessionId, 'graceful');
+
   const disconnectTx = db.transaction(() => {
+    const current = db.prepare(`SELECT status FROM sessions WHERE id = ?`).get(sessionId) as any;
+    if (!current || current.status === 'dead') return;
+
     const event = appendEvent(projectId, sessionId, 'SESSION_DISCONNECTED', {
       session_id: sessionId,
       timestamp: now,
@@ -233,7 +236,7 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
       WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > ?
     `).all(now, SESSION_DEAD_THRESHOLD_SECS) as any[];
 
-    // Pre-compute handoffs outside database transaction block
+    // Pre-compute handoffs outside database transaction block to prevent holding write lock during materialization
     const deadHandoffs = deadRows.map(row => ({
       row,
       handoff: generateStructuredHandoff(row.project_id, row.id, 'ungraceful')
@@ -241,6 +244,10 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
 
     db.transaction(() => {
       for (const entry of deadHandoffs) {
+        const current = db.prepare(`SELECT status FROM sessions WHERE id = ?`).get(entry.row.id) as any;
+        if (!current || (current.status !== 'alive' && current.status !== 'stale')) {
+          continue;
+        }
         db.prepare(`UPDATE sessions SET status = 'dead' WHERE id = ?`).run(entry.row.id);
         const event = appendEvent(entry.row.project_id, entry.row.id, 'SESSION_DISCONNECTED', {
           session_id: entry.row.id, timestamp: now, reason: 'heartbeat_timeout', handoff: entry.handoff

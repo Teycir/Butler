@@ -44,7 +44,12 @@ export function getProjectDiff(projectId: string, sinceEventId: number): DiffEnt
 
   for (const event of events) {
     let payload: any;
-    try { payload = JSON.parse(event.payload); } catch { continue; }
+    try {
+      payload = JSON.parse(event.payload);
+    } catch (err) {
+      console.error(`[Butler] Failed to parse payload for event ID ${event.id} during diff, skipping:`, err);
+      continue;
+    }
 
     const summary = summariseEvent(event.type, event.session_id, payload);
     if (summary === null) continue; // skip non-state-changing events
