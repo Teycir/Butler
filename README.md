@@ -85,7 +85,7 @@ Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process e
 The fastest way to install and configure Butler is via `npx`:
 
 ```bash
-npx butler-mcp install   # Auto-configures all clients (Claude, Cursor, VS Code, Kiro CLI, Kilo Code)
+npx butler-mcp install   # Scans and auto-configures all active clients (Claude, Cursor, VS Code, Zed, Windsurf, etc.)
 npx butler-mcp status    # Runs the visual status CLI
 npx butler-mcp dashboard # Runs the web dashboard
 ```
@@ -115,11 +115,16 @@ bash install/install.sh
 ```
 
 The installer will:
-- Build Butler from source
-- Deploy the release to `~/Mcp/butler-mcp/`
-- Auto-configure **Claude Desktop**, **Kiro CLI**, **Kilo Code**, **VS Code**, and **Cursor**
+- Build Butler from source.
+- Deploy the production bundle to `~/Mcp/butler-mcp/`.
+- Automatically scan the host machine for active coding clients.
+- Inject the Butler MCP configuration into all detected clients (supporting **Claude Desktop**, **Claude Code**, **Cursor**, **VS Code**, **Windsurf**, **Zed**, **Gemini CLI**, **Kiro CLI**, and **Kilo Code**).
+- **JSONC / Comment Safe**: Safely parses configurations with comments and trailing commas without overwriting custom settings.
 
-> **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
+> **Custom DB path:** Pass `--db-path` to use a custom SQLite file location:
+> `bash install/install.sh --db-path /your/path/butler.db`
+> Or on Windows:
+> `.\install\install.ps1 -DbPath "C:\your\path\butler.db"`
 
 #### Option B: Manual setup
 
@@ -321,9 +326,12 @@ bash install/install.sh
 .\install\install.ps1
 ```
 
-The installer builds Butler, deploys the release to `~/Mcp/butler-mcp/`, and auto-configures Claude Desktop, Kiro CLI, Kilo Code, VS Code, and Cursor. Restart your AI clients and Butler is ready.
+The installer builds Butler, deploys the release to `~/Mcp/butler-mcp/`, and auto-configures detected clients (including Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Gemini CLI, Kiro CLI, and Kilo Code) safely. Restart your AI clients and Butler is ready.
 
-> **Custom DB path:** `bash install/install.sh --db-path /your/path/butler.db`
+> **Custom DB path:** Pass `--db-path` to specify a custom database location:
+> `bash install/install.sh --db-path /your/path/butler.db`
+> Or on Windows:
+> `.\install\install.ps1 -DbPath "C:\your\path\butler.db"`
 
 #### Verify Installation
 
@@ -428,19 +436,18 @@ Butler ships with a local command line interface (CLI) to configure, manage, and
 
 ### `butler install`
 
-Deploys the Butler production bundle to `~/Mcp/butler-mcp` and automatically injects the Butler MCP server configuration into your local AI client config files (Claude Desktop, Cursor, Kiro CLI, VS Code, and Kilo Code).
+Deploys the Butler production bundle to `~/Mcp/butler-mcp` and automatically injects the Butler MCP server configuration into your local AI client configuration files. If no clients are explicitly registered, it scans your system to auto-detect and register active clients. It supports comments (JSONC) and trailing commas safely.
 
 ```text
 $ butler install
-📦 Installing Butler globally/locally...
-🚀 Deploying to /home/user/Mcp/butler-mcp...
+🔨 Building from source...
+🚀 Syncing to /home/user/Mcp/butler-mcp...
 
-🔧 Configuring MCP clients...
-  → /home/user/.config/Claude/claude_desktop_config.json
-  → /home/user/.config/Cursor/User/mcp.json
-  → /home/user/.config/kiro-cli/mcp.json
-  → /home/user/.config/Code/User/mcp.json
-  → /home/user/.config/Antigravity/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json
+🔧 Injecting Butler into registered AI clients...
+  ✅ /home/user/.config/Claude/claude_desktop_config.json
+  ✅ /home/user/.config/Cursor/User/mcp.json
+  ✅ /home/user/.config/zed/settings.json
+  ...
 
 🎉 Done! Restart your AI clients to activate Butler.
 
@@ -451,7 +458,7 @@ $ butler install
 On startup: call projectlist, then sessionregister (project_id from .butler/project.json or ask the user, session_id = "<client>-<4 random chars>", client_type = your tool name). Heartbeat every 15 seconds. Before exit: call handoffcreate with a summary of what you did, then sessiondisconnect.
 
 🧪 Verifying setup...
-Open Claude Desktop / Cursor and ask: 'Can you call the butlerping tool?'
+Open any registered client and ask: 'Can you call the butlerping tool?'
 Expected response: status: ok, schema_version: 8
 ```
 
