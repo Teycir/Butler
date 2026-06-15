@@ -10,10 +10,12 @@
  *     auto-registration of missing sessions, and auto-register warning injection
  *
  * Actual tool logic lives in:
- *   mcp/tools/session.tools.ts   — sessionregister, sessionheartbeat, sessiondisconnect
- *   mcp/tools/todo.tools.ts      — todoadd, todocomplete, todoupdate, tododelete, todolist
- *   mcp/tools/knowledge.tools.ts — wikiupdate, ruleadd, ruleremove, decisionrecord, handoffcreate
- *   mcp/tools/memory.tools.ts    — memorystore, memorysearch, memorydelete, projectlist
+ *   mcp/tools/session.tools.ts       — sessionregister, sessionheartbeat, sessiondisconnect
+ *   mcp/tools/todo.tools.ts          — todoadd, todocomplete, todoupdate, tododelete, todolist
+ *   mcp/tools/knowledge.tools.ts     — wikiupdate, ruleadd, ruleremove, decisionrecord, handoffcreate
+ *   mcp/tools/memory.tools.ts        — memorystore, memorysearch, memorydelete, projectlist
+ *   mcp/tools/coordination.tools.ts  — todoclaim, todounclaim, messagesend, broadcast, synccontext
+ *   mcp/tools/observability.tools.ts — eventsexport, butlerping
  *
  * Resource logic lives in:
  *   mcp/resources.ts             — context, todos, wiki, sessions, memories, diff

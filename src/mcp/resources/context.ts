@@ -9,7 +9,8 @@ import { formatAge, formatRecencyDays, formatTimestamp } from '../../lib/format.
 // Cache for context rendering to prevent redundant materialize + TF-IDF queries
 interface CachedContext {
   lastEventId: number;
-  renderedAt: number; // unix timestamp in seconds
+  renderedAt: number;    // unix timestamp in seconds
+  lastAccessed: number;  // unix timestamp in seconds — used for LRU eviction
   response: {
     contents: Array<{ uri: string; mimeType: string; text: string }>;
   };
@@ -27,6 +28,7 @@ export function buildContextResource(uri: string, projectId: string) {
   // 2. Check cache (cache for 15 seconds if lastEventId matches)
   const cached = contextCache.get(projectId);
   if (cached && cached.lastEventId === currentLastEventId && (now - cached.renderedAt) < 15) {
+    cached.lastAccessed = now;
     return cached.response;
   }
 
@@ -81,12 +83,21 @@ export function buildContextResource(uri: string, projectId: string) {
   contextCache.set(projectId, {
     lastEventId: currentLastEventId,
     renderedAt: now,
+    lastAccessed: now,
     response
   });
 
-  // Evict the oldest entry if the cache size exceeds 100 projects
+  // Evict the least-recently-accessed entry when the cache exceeds 100 projects.
+  // Map iteration is insertion-order; we must scan all entries to find the true LRU.
   if (contextCache.size > 100) {
-    const oldestKey = contextCache.keys().next().value;
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [k, v] of contextCache.entries()) {
+      if (v.lastAccessed < oldestTime) {
+        oldestTime = v.lastAccessed;
+        oldestKey = k;
+      }
+    }
     if (oldestKey !== undefined) {
       contextCache.delete(oldestKey);
     }

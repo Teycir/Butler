@@ -772,9 +772,6 @@ async function runTests() {
 
     // Update last_event_seen checkpoint so generateStructuredHandoff picks up only new events
     const db = getDb();
-    const latestEvent = db.prepare(
-      'SELECT id FROM events WHERE project_id = ? AND session_id = ? ORDER BY id DESC LIMIT 1'
-    ).get(PROJECT_HO, SESS_HO) as any;
     db.prepare('UPDATE sessions SET last_event_seen = ? WHERE id = ?').run(0, SESS_HO);
 
     const handoff = generateStructuredHandoff(PROJECT_HO, SESS_HO, 'graceful');
@@ -1853,7 +1850,8 @@ async function runTests() {
     assert(!sanitizedTodo.match(/^#/m), 'Heading injection must be escaped in completed_todos');
     assert(!sanitizedTodo.includes('```'), 'Code fence injection must be escaped in completed_todos');
 
-    const sanitizedDiffLine = escapeMarkdownForRender(handoff.payload.diff_summary.split('\n')[0]);
+    const diffSummary = handoff.payload.diff_summary ?? '';
+    const sanitizedDiffLine = escapeMarkdownForRender(diffSummary.split('\n')[0]);
     assert(!sanitizedDiffLine.match(/^#/), 'Heading injection must be escaped in diff_summary');
   });
 
@@ -1913,13 +1911,14 @@ async function runTests() {
     // Create a TODO and let Session A claim it
     const todoId = getNextSequenceValue(SYNC_PROJECT, 'todo');
     appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CREATED', { todo_id: todoId, title: 'Sync-target task', priority: 'medium' });
-    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: SESS_A });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: SESS_A, claimed_at: Date.now() });
 
     // Create a second TODO, claim it, and complete it to verify completed claims are not transferred
     const todoId2 = getNextSequenceValue(SYNC_PROJECT, 'todo');
+    const nowTs = Date.now();
     appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CREATED', { todo_id: todoId2, title: 'Completed sync-target task', priority: 'medium' });
-    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId2, session_id: SESS_A });
-    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_COMPLETED', { todo_id: todoId2 });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId2, session_id: SESS_A, claimed_at: nowTs });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_COMPLETED', { todo_id: todoId2, version: 1 });
 
     // Set A's event seen marker
     db.prepare('UPDATE sessions SET last_event_seen = 42 WHERE id = ?').run(SESS_A);

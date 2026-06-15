@@ -45,12 +45,28 @@ export function addMemory(
                   embedding = excluded.embedding, importance = excluded.importance
   `).run(projectId, type, content, sourceRef ?? null, sourceEventId ?? null, sessionId ?? null, embeddingBlob, importance, now);
 
-  const rowId = Number(result.lastInsertRowid);
+  // On an upsert conflict SQLite sets lastInsertRowid to the existing row's rowid,
+  // which is correct for id — but re-fetch both id and created_at together so the
+  // returned record is always consistent with what is actually stored.
+  // When source_ref is set and the conflict fired (changes === 1 means update, not insert),
+  // the original created_at is preserved in the DB; `now` would be wrong for it.
+  let rowId = Number(result.lastInsertRowid);
+  let createdAt = now;
 
-  // Re-fetch created_at from the DB: on an upsert conflict the row is updated in-place,
-  // so `now` is wrong for the returned record (the original created_at is preserved).
-  const stored = db.prepare('SELECT created_at FROM memories WHERE id = ?').get(rowId) as any;
-  const createdAt = stored ? Number(stored.created_at) : now;
+  if (sourceRef != null) {
+    // Re-read the canonical row: covers both the insert path and the upsert-conflict path.
+    const stored = db.prepare(
+      'SELECT id, created_at FROM memories WHERE project_id = ? AND type = ? AND source_ref = ?'
+    ).get(projectId, type, sourceRef) as any;
+    if (stored) {
+      rowId = Number(stored.id);
+      createdAt = Number(stored.created_at);
+    }
+  } else {
+    // Plain insert — created_at is `now` and rowId from lastInsertRowid is authoritative.
+    const stored = db.prepare('SELECT created_at FROM memories WHERE id = ?').get(rowId) as any;
+    if (stored) createdAt = Number(stored.created_at);
+  }
 
   return {
     id: rowId,
@@ -179,10 +195,11 @@ export function searchMemories(
       }
     }
 
-    // If no keywords matched or query was too short, fallback to general getMemories
+    // If no keywords matched or query was too short, fallback to general getMemories.
+    // Use MEMORY_SEARCH_LIMIT (same cap as the FTS path) so the TF-IDF scorer
+    // has the same candidate pool regardless of which path was taken.
     if (memories.length === 0) {
-      const fallbackLimit = 100;
-      memories = getMemories(projectId, fallbackLimit, true);
+      memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, true);
     }
   } else {
     memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, false);

@@ -78,6 +78,7 @@ export interface HandoffPayload {
   rules_added?: string[];
   wiki_updated?: string[];
   summary: string;
+  diff_summary?: string;
   timestamp: number;
 }
 

@@ -89,7 +89,6 @@ export async function handleSyncContext(
       // Invalidate cache first to read the freshest state from DB
       invalidateProjectCache(projectId);
       const freshState = materializeProject(projectId, false);
-
       // Verify that the mainPeer exists and is still valid
       const peerSessionRow = db.prepare('SELECT last_event_seen, last_heartbeat FROM sessions WHERE id = ? AND project_id = ?')
         .get(mainPeer.id, projectId) as { last_event_seen: number; last_heartbeat: number } | undefined;
@@ -173,6 +172,11 @@ export async function handleSyncContext(
       db.prepare('UPDATE sessions SET last_event_seen = ? WHERE id = ?')
         .run(broadcastEvent.id, String(args.session_id));
 
+      // Invalidate the cache inside the transaction so any concurrent reader that
+      // acquires the DB lock after the commit gets a fresh materialisation,
+      // with no window where stale claim ownership could be served from cache.
+      invalidateProjectCache(projectId);
+
       return {
         transferredClaims,
         targetEventId,
@@ -183,8 +187,7 @@ export async function handleSyncContext(
       };
     })();
 
-    // Invalidate project cache to materialize changes
-    invalidateProjectCache(projectId);
+    // Cache was already invalidated inside the transaction above.
 
     const rulesSection = result.peerRules.length > 0 ? `\n\nImported Peer Rules:\n${result.peerRules}` : '';
     const decisionsSection = result.peerDecisions.length > 0 ? `\n\nImported Peer Architectural Decisions:\n${result.peerDecisions}` : '';

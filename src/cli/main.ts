@@ -11,8 +11,17 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import readline from 'readline';
+import { execSync } from 'child_process';
 import Database from 'better-sqlite3';
 import { initDatabase, getDatabasePath } from '../db/database.js';
+import {
+  getClientConfigs,
+  getAllKnownClients,
+  getRegisteredSlugs,
+  addClientSlug,
+  removeClientSlug,
+  KNOWN_CLIENTS,
+} from './clientConfigs.js';
 
 // Resolve directory name in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -26,7 +35,11 @@ Usage:
   butler <command> [options]
 
 Commands:
-  install       Configure all local AI clients (Claude Desktop, Cursor, etc.)
+  clients       Manage which AI tools Butler installs into
+                  butler clients list            — show all available + registered clients
+                  butler clients add <slug>      — opt in to a client
+                  butler clients remove <slug>   — opt out of a client
+  install       Inject Butler MCP into every registered client
   init          Interactively initialize a new project config (.butler/project.json)
   status        Check the health and status of active projects
   tui           Interactive live terminal monitor dashboard
@@ -53,6 +66,62 @@ function askQuestion(query: string, defaultValue?: string): Promise<string> {
 }
 
 // ─── Subcommands ─────────────────────────────────────────────────────────────
+
+function handleClients(subArgs: string[]) {
+  const sub = subArgs[0];
+
+  if (!sub || sub === 'list') {
+    const registered = new Set(getRegisteredSlugs());
+    const all = getAllKnownClients();
+    console.log('\n📋 Available AI clients (slug → name)\n');
+    for (const { slug, name, path: cfgPath } of all) {
+      const tick = registered.has(slug) ? '✅' : '  ';
+      console.log(`  ${tick}  ${slug.padEnd(20)} ${name}`);
+      if (registered.has(slug)) {
+        console.log(`           config → ${cfgPath}`);
+      }
+    }
+    if (registered.size === 0) {
+      console.log('\n  No clients registered yet.');
+      console.log('  Run: butler clients add <slug>\n');
+    } else {
+      console.log(`\n  ${registered.size} client(s) registered. Run \`butler install\` to apply.\n`);
+    }
+    return;
+  }
+
+  if (sub === 'add') {
+    const slug = subArgs[1];
+    if (!slug) {
+      console.error('Usage: butler clients add <slug>');
+      console.error('Run `butler clients list` to see available slugs.');
+      process.exit(1);
+    }
+    const result = addClientSlug(slug);
+    console.log(result.ok ? `✅ ${result.message}` : `❌ ${result.message}`);
+    if (result.ok) {
+      const cfg = KNOWN_CLIENTS[slug](process.platform);
+      console.log(`   config path → ${cfg.path}`);
+      console.log(`   Run \`butler install\` to inject Butler into ${cfg.name}.`);
+    }
+    return;
+  }
+
+  if (sub === 'remove') {
+    const slug = subArgs[1];
+    if (!slug) {
+      console.error('Usage: butler clients remove <slug>');
+      process.exit(1);
+    }
+    const result = removeClientSlug(slug);
+    console.log(result.ok ? `✅ ${result.message}` : `❌ ${result.message}`);
+    return;
+  }
+
+  console.error(`Unknown subcommand: clients ${sub}`);
+  console.error('Available: list | add <slug> | remove <slug>');
+  process.exit(1);
+}
 
 async function handleInstall() {
   console.log('📦 Installing Butler globally/locally...');
@@ -93,61 +162,14 @@ async function handleInstall() {
     console.log(`  → ${cfgPath}`);
   }
 
-  const isMac = process.platform === 'darwin';
-  const isWin = process.platform === 'win32';
   const nodeBin = process.execPath;
-  const configs: { path: string; name: string }[] = [];
+  const configs = getClientConfigs();
 
-  if (isMac) {
-    configs.push({
-      path: path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    configs.push({
-      path: path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  } else if (isWin) {
-    const appData = process.env.APPDATA || '';
-    configs.push({
-      path: path.join(appData, 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    configs.push({
-      path: path.join(appData, 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  } else {
-    // Linux
-    configs.push({
-      path: path.join(os.homedir(), '.config', 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    configs.push({
-      path: path.join(os.homedir(), '.config', 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  }
-
-  configs.push({
-    path: isWin
-      ? path.join(process.env.APPDATA || '', 'kiro-cli', 'mcp.json')
-      : path.join(os.homedir(), '.config', 'kiro-cli', 'mcp.json'),
-    name: 'Kiro CLI'
-  });
-
-  configs.push({
-    path: isWin
-      ? path.join(process.env.APPDATA || '', 'Code', 'User', 'mcp.json')
-      : path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json'),
-    name: 'VS Code'
-  });
-
-  if (!isWin) {
-    configs.push({
-      path: path.join(os.homedir(), '.config', 'Antigravity', 'User', 'globalStorage', 'kilocode.kilo-code', 'settings', 'mcp_settings.json'),
-      name: 'Kilo Code'
-    });
+  if (configs.length === 0) {
+    console.log('\n⚠️  No AI clients registered yet.');
+    console.log('   Add one first, e.g.:  butler clients add claude-desktop');
+    console.log('   See all options with: butler clients list\n');
+    return;
   }
 
   console.log('\n🔧 Configuring MCP clients...');
@@ -277,60 +299,7 @@ function handleDoctor() {
   }
 
   // Check client configurations
-  const isMac = process.platform === 'darwin';
-  const isWin = process.platform === 'win32';
-  const clients: { name: string; path: string }[] = [];
-
-  if (isMac) {
-    clients.push({
-      path: path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    clients.push({
-      path: path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  } else if (isWin) {
-    const appData = process.env.APPDATA || '';
-    clients.push({
-      path: path.join(appData, 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    clients.push({
-      path: path.join(appData, 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  } else {
-    clients.push({
-      path: path.join(os.homedir(), '.config', 'Claude', 'claude_desktop_config.json'),
-      name: 'Claude Desktop'
-    });
-    clients.push({
-      path: path.join(os.homedir(), '.config', 'Cursor', 'User', 'mcp.json'),
-      name: 'Cursor'
-    });
-  }
-
-  clients.push({
-    path: isWin
-      ? path.join(process.env.APPDATA || '', 'kiro-cli', 'mcp.json')
-      : path.join(os.homedir(), '.config', 'kiro-cli', 'mcp.json'),
-    name: 'Kiro CLI'
-  });
-
-  clients.push({
-    path: isWin
-      ? path.join(process.env.APPDATA || '', 'Code', 'User', 'mcp.json')
-      : path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json'),
-    name: 'VS Code'
-  });
-
-  if (!isWin) {
-    clients.push({
-      path: path.join(os.homedir(), '.config', 'Antigravity', 'User', 'globalStorage', 'kilocode.kilo-code', 'settings', 'mcp_settings.json'),
-      name: 'Kilo Code'
-    });
-  }
+  const clients = getClientConfigs();
 
   let repairNeeded = false;
   for (const client of clients) {
@@ -383,6 +352,9 @@ async function main() {
   }
 
   switch (command) {
+    case 'clients':
+      handleClients(args.slice(1));
+      break;
     case 'install':
       await handleInstall();
       break;

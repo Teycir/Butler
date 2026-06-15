@@ -35,8 +35,8 @@ async function runTests() {
     const checkpointer = getLangGraphCheckpointer();
     assert(checkpointer !== null, 'Checkpointer should not be null');
 
-    // Run setup to ensure tables are created
-    await checkpointer.setup();
+    // Run setup to ensure tables are created (using bracket notation for protected method in tests)
+    await checkpointer['setup']();
 
     const db = getDb();
     const tables = db.prepare(
@@ -80,6 +80,9 @@ async function runTests() {
     
     const latestTuple = await checkpointer.getTuple(config);
     assert(latestTuple !== undefined, 'Should be able to retrieve latest checkpoint tuple');
+    if (!latestTuple) {
+      throw new Error('latestTuple is undefined');
+    }
     assert(latestTuple.checkpoint.channel_values.count === 6, `Expected count 6, got ${latestTuple.checkpoint.channel_values.count}`);
   });
 

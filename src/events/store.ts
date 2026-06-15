@@ -1,6 +1,7 @@
 import { getDb, sha256hex } from '../db/database.js';
 import { EventPayloadMap, EventRecord, EventType } from './types.js';
 import { now as getCurrentTimestamp, SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_RETENTION_COUNT } from '../constants.js';
+import { parseEvents, parseSnapshot } from '../db/zod.js';
 
 export function appendEvent<T extends EventType>(
   projectId: string,
@@ -38,15 +39,8 @@ export function getEvents(projectId: string, sinceEventId: number = 0): EventRec
     ORDER BY id ASC
   `);
   
-  const rows = stmt.all(projectId, sinceEventId) as any[];
-  return rows.map(r => ({
-    id: Number(r.id),
-    project_id: r.project_id,
-    session_id: r.session_id,
-    type: r.type as EventType,
-    payload: r.payload,
-    created_at: Number(r.created_at)
-  }));
+  const rows = stmt.all(projectId, sinceEventId);
+  return parseEvents(rows) as EventRecord[];
 }
 
 
@@ -59,54 +53,70 @@ export function getSessionEvents(projectId: string, sessionId: string, sinceEven
     ORDER BY id ASC
   `);
   
-  const rows = stmt.all(projectId, sessionId, sinceEventId) as any[];
-  return rows.map(r => ({
-    id: Number(r.id),
-    project_id: r.project_id,
-    session_id: r.session_id,
-    type: r.type as EventType,
-    payload: r.payload,
-    created_at: Number(r.created_at)
-  }));
+  const rows = stmt.all(projectId, sessionId, sinceEventId);
+  return parseEvents(rows) as EventRecord[];
 }
 
 /**
  * Returns a transaction-safe, sequentially incrementing ID for a specific entity type within a project.
- * Uses atomic SQLite transactions to prevent race conditions on concurrent insertions.
+ * Uses a SAVEPOINT so the three statements (INSERT OR IGNORE → UPDATE → SELECT) are always atomic,
+ * whether called standalone or nested inside an outer transaction. If the outer transaction rolls back,
+ * the savepoint rolls back with it, preventing gaps in the sequence.
  */
 export function getNextSequenceValue(projectId: string, name: string): number {
   const db = getDb();
-  
-  const execute = () => {
+
+  // Check if we're already inside a transaction by attempting a nested transaction
+  const inTransaction = db.inTransaction;
+
+  if (inTransaction) {
+    // Use SAVEPOINT when nested inside an outer transaction
+    db.prepare('SAVEPOINT seq_savepoint').run();
+    try {
+      db.prepare(`
+        INSERT OR IGNORE INTO sequences (project_id, name, next_value)
+        VALUES (?, ?, 0)
+      `).run(projectId, name);
+
+      db.prepare(`
+        UPDATE sequences
+        SET next_value = next_value + 1
+        WHERE project_id = ? AND name = ?
+      `).run(projectId, name);
+
+      const row = db.prepare(`
+        SELECT next_value
+        FROM sequences
+        WHERE project_id = ? AND name = ?
+      `).get(projectId, name) as any;
+
+      db.prepare('RELEASE seq_savepoint').run();
+      return Number(row.next_value);
+    } catch (err) {
+      db.prepare('ROLLBACK TO seq_savepoint').run();
+      throw err;
+    }
+  } else {
+    // Not in a transaction — execute directly
     db.prepare(`
       INSERT OR IGNORE INTO sequences (project_id, name, next_value)
       VALUES (?, ?, 0)
     `).run(projectId, name);
-    
+
     db.prepare(`
       UPDATE sequences
       SET next_value = next_value + 1
       WHERE project_id = ? AND name = ?
     `).run(projectId, name);
-    
+
     const row = db.prepare(`
       SELECT next_value
       FROM sequences
       WHERE project_id = ? AND name = ?
     `).get(projectId, name) as any;
-    
-    return Number(row.next_value);
-  };
 
-  // If already in an active transaction, run the queries directly.
-  // better-sqlite3 does support nested transactions via savepoints, but running 
-  // directly avoids unnecessary savepoint overhead and nested transaction concerns.
-  if (db.inTransaction) {
-    return execute();
+    return Number(row.next_value);
   }
-  
-  const incrementTx = db.transaction(execute);
-  return incrementTx();
 }
 
 export function createSnapshot(projectId: string, eventId: number, state: Record<string, any>): void {
@@ -150,36 +160,37 @@ export function getLatestSnapshot(projectId: string): SnapshotRecord | null {
     WHERE project_id = ?
     ORDER BY event_id DESC
     LIMIT 3
-  `).all(projectId) as any[];
+  `).all(projectId);
 
   for (const row of rows) {
+    const parsed = parseSnapshot(row);
     // Schema version check: reject snapshots written by a different schema version
-    const snapshotSchemaVersion = row.schema_version ?? 1;
+    const snapshotSchemaVersion = parsed.schema_version ?? 1;
     if (snapshotSchemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
       console.error(
-        `Snapshot schema version mismatch for project ${projectId} at event_id ${row.event_id} ` +
+        `Snapshot schema version mismatch for project ${projectId} at event_id ${parsed.event_id} ` +
         `(snapshot: v${snapshotSchemaVersion}, current: v${SNAPSHOT_SCHEMA_VERSION}) — skipping`
       );
       continue;
     }
 
     // Integrity check: legacy snapshots (sha256_hex = '') are accepted without validation
-    if (row.sha256_hex && row.sha256_hex !== '') {
-      const expected = sha256hex(row.snapshot_json);
-      if (expected !== row.sha256_hex) {
+    if (parsed.sha256_hex && parsed.sha256_hex !== '') {
+      const expected = sha256hex(parsed.snapshot_json);
+      if (expected !== parsed.sha256_hex) {
         console.error(
-          `Snapshot integrity failure for project ${projectId} at event_id ${row.event_id} — skipping and replaying from prior snapshot`
+          `Snapshot integrity failure for project ${projectId} at event_id ${parsed.event_id} — skipping and replaying from prior snapshot`
         );
         continue;
       }
     }
 
     return {
-      id: Number(row.id),
-      project_id: row.project_id,
-      event_id: Number(row.event_id),
-      snapshot_json: row.snapshot_json,
-      created_at: Number(row.created_at)
+      id: parsed.id,
+      project_id: parsed.project_id,
+      event_id: parsed.event_id,
+      snapshot_json: parsed.snapshot_json,
+      created_at: parsed.created_at
     };
   }
 

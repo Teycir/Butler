@@ -330,12 +330,15 @@ export function detectAndRecordConflict(
     ? `Both sessions marked #${todoId} complete within ${ageOfLastWrite}s. Suggest: verify final state matches expectations and delete duplicate event if needed.`
     : `Both sessions updated #${todoId} within ${ageOfLastWrite}s. Suggest: verify final state matches expectations and reconcile differences if needed.`;
 
-  appendEvent(projectId, writingSessionId, 'TODO_CONFLICT', {
+  const conflictEvent = appendEvent(projectId, writingSessionId, 'TODO_CONFLICT', {
     todo_id: todoId,
     conflicting_session_id: lastUpdatedBy,
     conflict_type: conflictType,
     conflicting_sessions: sessions,
     hint: hintText
   });
+  // Advance last_event_seen so the conflict event appears in this session's own
+  // handoff diff (getSessionEvents uses sinceEventId = sess.last_event_seen).
+  updateLastEventSeen(writingSessionId, conflictEvent.id);
   return hintText;
 }

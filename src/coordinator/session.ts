@@ -9,6 +9,7 @@
  */
 
 import { getDb } from '../db/database.js';
+import { parseSession } from '../db/zod.js';
 
 export interface SessionRecord {
   id: string;
@@ -25,18 +26,10 @@ export function getSession(sessionId: string): SessionRecord | null {
   const row = db.prepare(`
     SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions WHERE id = ?
-  `).get(sessionId) as any;
+  `).get(sessionId);
 
   if (!row) return null;
-  return {
-    id: row.id,
-    project_id: row.project_id,
-    client_type: row.client_type,
-    status: row.status as any,
-    created_at: Number(row.created_at),
-    last_heartbeat: Number(row.last_heartbeat),
-    last_event_seen: Number(row.last_event_seen)
-  };
+  return parseSession(row);
 }
 
 export function updateLastEventSeen(sessionId: string, eventId: number): void {

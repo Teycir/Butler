@@ -17,6 +17,16 @@
 
 ---
 
+#### 🌟 Features Showcase
+
+| 🖥️ Live Orchestration Dashboard | 👤 Active Session Topology & Status |
+| :---: | :---: |
+| ![Butler TUI Dashboard](public/tui_snapshot.jpg) | ![Active Session Topology](public/tui_session_topology.jpg) |
+| **⚡ Concurrency Mutation Conflicts** | **🤝 Handoff Quality Scorecard & Coaching** |
+| ![Mutation Conflicts](public/tui_conflict_alerting.jpg) | ![Handoff Quality Coaching](public/tui_handoff_coaching.jpg) |
+
+---
+
 ## 📑 Table of Contents
 
 - [Butler in 3 Minutes](#-butler-in-3-minutes)
@@ -216,7 +226,7 @@ graph TD
     end
 
     subgraph Resources["mcp/resources.ts · mcp/resources/"]
-        R_CTX[context · todos · wiki<br/>sessions · memories · diff · checkpoints]
+        R_CTX[context · todos · wiki<br/>sessions · memories · diff · orchestration]
     end
 
     subgraph Coordinator["src/coordinator/"]
@@ -362,7 +372,7 @@ npm test
 | `butler://projects/{id}/sessions` | Active and stale session registry (JSON). |
 | `butler://projects/{id}/memories` | Complete project memory log (JSON). |
 | `butler://projects/{id}/diff?since={eventId}` | Compact changelog of all state changes since a given event ID, grouped by type. |
-| `butler://projects/{id}/checkpoints` | LangGraph orchestration checkpoints stored for the project (JSON). |
+| `butler://projects/{id}/orchestration` | LangGraph orchestration checkpoints and execution state stored for the project (JSON). |
 
 ### Tools
 
@@ -501,15 +511,6 @@ Supports `--project <id>`, `--db <path>`, `--json`, and `--help` flags.
 ### `butler tui`
 
 Launches a live split-screen Terminal User Interface (TUI) that refreshes every 2 seconds, displaying real-time agent presence, broadcast events, active tasks, version conflicts, and handoff quality metrics.
-
-#### 🌟 Features Showcase
-
-| 🖥️ Live Orchestration Dashboard | 👤 Active Session Topology & Status |
-| :---: | :---: |
-| ![Butler TUI Dashboard](public/tui_snapshot.jpg) | ![Active Session Topology](public/tui_session_topology.jpg) |
-| **⚡ Concurrency Mutation Conflicts** | **🤝 Handoff Quality Scorecard & Coaching** |
-| ![Mutation Conflicts](public/tui_conflict_alerting.jpg) | ![Handoff Quality Coaching](public/tui_handoff_coaching.jpg) |
-
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐

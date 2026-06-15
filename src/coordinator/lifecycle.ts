@@ -12,6 +12,7 @@ import { getDb } from '../db/database.js';
 import { appendEvent } from '../events/store.js';
 import { materializeProject, invalidateProjectCache } from '../events/materializer.js';
 import { validateProjectId, validateSessionId } from '../validation.js';
+import { parseSession, parseSessions } from '../db/zod.js';
 import {
   SESSION_STALE_THRESHOLD_SECS,
   SESSION_DEAD_THRESHOLD_SECS,
@@ -47,10 +48,12 @@ export function registerSession(
   const registerTx = db.transaction(() => {
     db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(projectId, projectId);
 
-    const existing = db.prepare(`
+    const existingRow = db.prepare(`
       SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
       FROM sessions WHERE id = ?
-    `).get(sessionId) as any;
+    `).get(sessionId);
+
+    const existing = existingRow ? parseSession(existingRow) : null;
 
     if (existing) {
       const event = appendEvent(projectId, sessionId, 'SESSION_RECOVERED', {
@@ -84,17 +87,9 @@ export function getActiveSessions(projectId: string): SessionRecord[] {
     SELECT id, project_id, client_type, status, created_at, last_heartbeat, last_event_seen
     FROM sessions
     WHERE project_id = ? AND status IN ('alive', 'stale')
-  `).all(projectId) as any[];
+  `).all(projectId);
 
-  return rows.map(row => ({
-    id: row.id,
-    project_id: row.project_id,
-    client_type: row.client_type,
-    status: row.status as any,
-    created_at: Number(row.created_at),
-    last_heartbeat: Number(row.last_heartbeat),
-    last_event_seen: Number(row.last_event_seen)
-  }));
+  return parseSessions(rows);
 }
 
 export function processHeartbeat(projectId: string, sessionId: string): void {
@@ -213,12 +208,17 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
     const now = getCurrentTimestamp();
 
     // 1. alive → stale (missed heartbeat, but not yet dead)
+    // Only sessions whose heartbeat is older than STALE but younger than DEAD qualify.
+    // We collect the IDs first, then mark them stale, so the dead-detection query
+    // below cannot accidentally pick up sessions that went stale in this same tick.
     const staleRows = db.prepare(`
       SELECT id, project_id FROM sessions
       WHERE status = 'alive'
         AND (? - last_heartbeat) > ?
         AND (? - last_heartbeat) <= ?
     `).all(now, SESSION_STALE_THRESHOLD_SECS, now, SESSION_DEAD_THRESHOLD_SECS) as any[];
+
+    const staleIds = new Set<string>(staleRows.map((r: any) => r.id));
 
     db.transaction(() => {
       for (const row of staleRows) {
@@ -231,13 +231,17 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
     for (const pid of projectsToInvalidateStale) invalidateProjectCache(pid);
 
     // 2. alive|stale → dead (heartbeat timeout exceeded)
+    // Exclude any session that was just marked stale in step 1 this tick —
+    // those should get a full interval before being considered dead.
     const deadRows = db.prepare(`
       SELECT id, project_id FROM sessions
       WHERE status IN ('alive', 'stale') AND (? - last_heartbeat) > ?
     `).all(now, SESSION_DEAD_THRESHOLD_SECS) as any[];
 
+    const filteredDeadRows = deadRows.filter((r: any) => !staleIds.has(r.id));
+
     // Pre-compute handoffs outside database transaction block to prevent holding write lock during materialization
-    const deadHandoffs = deadRows.map(row => ({
+    const deadHandoffs = filteredDeadRows.map(row => ({
       row,
       handoff: generateStructuredHandoff(row.project_id, row.id, 'ungraceful')
     }));
@@ -256,7 +260,7 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
       }
     })();
     const projectsToInvalidateDead = new Set<string>();
-    for (const row of deadRows) projectsToInvalidateDead.add(row.project_id);
+    for (const row of filteredDeadRows) projectsToInvalidateDead.add(row.project_id);
     for (const pid of projectsToInvalidateDead) invalidateProjectCache(pid);
 
     // 3. Periodic snapshot check

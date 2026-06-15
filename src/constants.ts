@@ -8,18 +8,16 @@ export const SNAPSHOT_CHECK_INTERVAL_SECS = 1800; // 30 minutes
 export const SNAPSHOT_RETENTION_COUNT = 3;
 
 /**
- * Incremented whenever the shape of ProjectState changes in a way that makes
- * old snapshots structurally incompatible with the current materializer.
- * On mismatch the snapshot is skipped and Butler replays from scratch or from
- * the prior clean snapshot.
+ * SNAPSHOT_SCHEMA_VERSION tracks the shape of ProjectState snapshots stored in the
+ * `snapshots` table. This is DISTINCT from the DB migration version in butler_migrations
+ * (currently v8) — do not confuse the two.
  *
- * Bump policy: increment when ProjectState fields are added, removed, or
- * renamed in a way that makes old snapshots structurally incompatible.
- * Old snapshots whose schema_version doesn't match are silently skipped
- * in getLatestSnapshot() — Butler falls back to full event replay from the
- * prior clean snapshot, or from the beginning if none exists.
- * There is no automatic migration of snapshot data; the event log is always
- * the source of truth.
+ * Increment SNAPSHOT_SCHEMA_VERSION whenever ProjectState fields are added, removed, or
+ * renamed in a way that makes old snapshots structurally incompatible with the current
+ * materializer. Old snapshots whose schema_version doesn't match are silently skipped
+ * in getLatestSnapshot() — Butler falls back to full event replay from the prior clean
+ * snapshot, or from the beginning if none exists. There is no automatic migration of
+ * snapshot data; the event log is always the source of truth.
  *
  * History:
  *   1 — initial schema (todos, wiki, rules, decisions, handoffs, lastEventId)
