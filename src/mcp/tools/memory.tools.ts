@@ -13,6 +13,7 @@ import { searchMemories, addMemory, deleteMemory } from '../../vector/index.js';
 import { sanitizeInput } from '../../validation.js';
 import { MEMORY_TYPES } from '../../events/types.js';
 import { SYSTEM_SESSION_ID } from '../../constants.js';
+import { formatTimestamp } from '../../lib/format.js';
 
 export const memoryToolDefs = [
   {
@@ -205,7 +206,7 @@ export function handleProjectList(): { content: Array<{ type: string; text: stri
   const projectList = rows.map(r => ({
     id: r.id,
     name: r.name,
-    created_at: new Date(r.created_at * 1000).toISOString()
+    created_at: formatTimestamp(r.created_at)
   }));
 
   return { content: [{ type: 'text', text: JSON.stringify(projectList, null, 2) }] };

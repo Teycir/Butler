@@ -107,9 +107,9 @@ export interface EventPayloadMap {
   'HANDOFF_CREATED': HandoffPayload;
   'MESSAGE_SENT': { from_session_id: string; to_session_id: string; content: string; sent_at: number };
   'BROADCAST': { from_session_id: string; content: string; sent_at: number };
-  'SUMMARY_CREATED': any;
-  'MEMORY_EXTRACTED': any;
+  'SUMMARY_CREATED': { summary: string; context: string };
+  'MEMORY_EXTRACTED': { memory_id: number; type: string; content: string };
   'MEMORY_DELETED': { memory_id: number };
-  'SNAPSHOT_CREATED': any;
+  'SNAPSHOT_CREATED': { snapshot_id: number; schema_version: number };
 }
 

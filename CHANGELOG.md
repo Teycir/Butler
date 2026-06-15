@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-15
+
+### Added
+- **feat(tests):** Add automated test to enforce `SNAPSHOT_SCHEMA_VERSION` bump discipline on `ProjectState` schema changes.
+- **feat(tests):** Add integration test for `eventsexport` to verify seamless since/until pagination.
+- **docs(readme):** Add documentation for LangGraph checkpointing and multi-agent orchestrator features.
+
+### Fixed
+- **fix(sync):** Wrap `synccontext` claim transfer, timeline alignment, and broadcasts in a database transaction to ensure atomic operations.
+- **fix(sync):** Re-materialize and re-check target peer status inside the transaction to eliminate the claim transfer race condition with completed/deleted tasks.
+- **fix(store):** Add check for `db.inTransaction` to prevent nested transaction errors inside `getNextSequenceValue` under `better-sqlite3`.
+- **fix(sync):** Extract active peer heartbeat locking time limit to a named constant `PEER_ACTIVE_LOCK_SECONDS`.
+
+### Changed & Refactored
+- **refactor(format):** Remove duplicate local formatting code in `context.ts` and `memory.tools.ts` by importing common formatting utilities (`formatAge`, `formatRecencyDays`, `formatTimestamp`) from `lib/format.ts`.
+
 ## [1.0.0] - 2026-06-10
 
 ### Added

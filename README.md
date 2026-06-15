@@ -35,6 +35,7 @@
 - [Context Freshness & Staleness](#-context-freshness--staleness)
 - [Multi-Agent Conflict Detection](#-multi-agent-conflict-detection)
 - [Schema Migration](#️-schema-migration)
+- [Multi-Agent Orchestration & LangGraph Integration](#-multi-agent-orchestration--langgraph-integration)
 - [Repository Anatomy](#-repository-anatomy)
 - [Principles](#-principles)
 - [Related Projects](#-related-projects)
@@ -467,6 +468,26 @@ Butler uses a versioned migration runner backed by a `butler_migrations` trackin
 - Records version number, description, and `applied_at` timestamp
 
 The `VERSIONED_MIGRATIONS` array in `schema.ts` is the single source of truth. Pre-existing databases are automatically brought up to date on startup.
+
+---
+
+## 🤖 Multi-Agent Orchestration & LangGraph Integration
+
+Butler features first-class integration with [LangGraph](https://github.com/langchain-ai/langgraphjs) to support complex, multi-step agent orchestration workflows (such as Planning ➔ Implementing ➔ Verifying ➔ Committing). 
+
+### LangGraph Checkpointer
+Butler provides a custom LangGraph checkpointer (`getLangGraphCheckpointer()`) that utilizes your existing `better-sqlite3` database to save and restore agent checkpoint states and conversation threads. This avoids the need to maintain a separate SQLite checkpointer file for LangGraph.
+
+To fetch the checkpointer instance:
+```typescript
+import { getLangGraphCheckpointer } from './dist/langgraph/checkpointer.js';
+const checkpointer = getLangGraphCheckpointer();
+```
+
+The checkpointer stores thread state in the `checkpoints` and `writes` tables, automatically managed under the same WAL-journaled database as the event log.
+
+### Simulated Agent Orchestrator
+Butler includes a built-in multi-agent state graph definition (`OrchestratorState` / `buildOrchestratorGraph`) to coordinate actions between different developer agents (e.g. Antigravity/Agy planning, Kiro CLI implementing, OpenCode verifying). The orchestrator uses LangGraph interrupts to pause execution until tasks are completed and marked complete in the Butler event log.
 
 ---
 

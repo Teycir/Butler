@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { initDatabase, closeDatabase, sha256hex } from '../src/db/database.js';
 import { appendEvent, getNextSequenceValue } from '../src/events/store.js';
-import { materializeProject, invalidateProjectCache } from '../src/events/materializer.js';
+import { materializeProject, invalidateProjectCache, createInitialState } from '../src/events/materializer.js';
 import {
   registerSession,
   processHeartbeat,
@@ -16,7 +16,9 @@ import {
 import { addMemory, deleteMemory, searchMemories, getMemories } from '../src/vector/index.js';
 import { validateProjectId, validateSessionId, sanitizeInput, sanitizeTitle, sanitizeMarkdown } from '../src/validation.js';
 import { getDb } from '../src/db/database.js';
-import { SNAPSHOT_SCHEMA_VERSION } from '../src/constants.js';
+import { SNAPSHOT_SCHEMA_VERSION, now as getCurrentTimestamp } from '../src/constants.js';
+import { handleCoordinationTool } from '../src/mcp/tools/coordination.tools.js';
+import { handleReadResource } from '../src/mcp/resources.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -890,6 +892,7 @@ async function runTests() {
     assertThrows(() => validateSessionId('bad session'), 'Invalid session_id');
     assertThrows(() => validateSessionId('sess@host'), 'Invalid session_id');
     assertThrows(() => validateSessionId('sess:port'), 'Invalid session_id');
+    assertThrows(() => validateSessionId('system'), 'Invalid session_id');
   });
 
   await test('registerSession throws on invalid project_id', () => {
@@ -1059,6 +1062,24 @@ async function runTests() {
   console.log('\n──────────────────────────────────────────');
   console.log('20. Snapshot Schema Versioning');
   console.log('──────────────────────────────────────────');
+
+  await test('createInitialState keys match expected ProjectState schema to enforce version bump discipline', () => {
+    const state = createInitialState();
+    const keys = Object.keys(state).sort();
+    const expectedKeys = [
+      'broadcasts',
+      'conflicts',
+      'decisions',
+      'handoffs',
+      'lastEventId',
+      'messages',
+      'rules',
+      'todos',
+      'wiki'
+    ];
+    assert(JSON.stringify(keys) === JSON.stringify(expectedKeys), 'ProjectState structure has changed! If you modified ProjectState fields in src/events/materializer.ts, you must increment SNAPSHOT_SCHEMA_VERSION in src/constants.ts and update this test.');
+    assert(SNAPSHOT_SCHEMA_VERSION === 2, `Expected SNAPSHOT_SCHEMA_VERSION to be 2. If you changed the ProjectState schema keys, increment SNAPSHOT_SCHEMA_VERSION and update this test.`);
+  });
 
   await test('Snapshots are written with current SNAPSHOT_SCHEMA_VERSION', () => {
     const PROJECT_SV = 'project-schema-version';
@@ -1564,6 +1585,19 @@ async function runTests() {
     assert(row !== undefined, 'idx_events_project_type index should exist after migration v5');
   });
 
+  await test('idx_checkpoints_thread and idx_writes_thread indexes exist (migration v7)', () => {
+    const db = getDb();
+    const checkpointsIndex = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_checkpoints_thread'`
+    ).get();
+    assert(checkpointsIndex !== undefined, 'idx_checkpoints_thread index should exist after migration v7');
+
+    const writesIndex = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_writes_thread'`
+    ).get();
+    assert(writesIndex !== undefined, 'idx_writes_thread index should exist after migration v7');
+  });
+
   // =========================================================================
   // 28. Phase 4.3 — eventsexport tool
   // =========================================================================
@@ -1666,6 +1700,31 @@ async function runTests() {
     const ids: number[] = parsed.events.map((ev: any) => ev.id);
     for (let i = 1; i < ids.length; i++) {
       assert(ids[i] > ids[i - 1], `Events out of order at index ${i}: ${ids[i - 1]} → ${ids[i]}`);
+    }
+  });
+
+  await test('eventsexport pagination with since and until has no gaps or duplicates', async () => {
+    // Get all events
+    const all = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT }, EXP_PROJECT);
+    const allParsed = JSON.parse(all.content[0].text.split('\n\n').slice(1).join('\n\n'));
+    if (allParsed.events.length >= 3) {
+      const boundaryId = allParsed.events[1].id;
+
+      // Page 1: up to boundaryId (inclusive)
+      const page1 = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, until: boundaryId }, EXP_PROJECT);
+      const p1Parsed = JSON.parse(page1.content[0].text.split('\n\n').slice(1).join('\n\n'));
+
+      // Page 2: since boundaryId (exclusive)
+      const page2 = await handleObservabilityTool('eventsexport', { project_id: EXP_PROJECT, since: boundaryId }, EXP_PROJECT);
+      const p2Parsed = JSON.parse(page2.content[0].text.split('\n\n').slice(1).join('\n\n'));
+
+      // Combine
+      const combined = [...p1Parsed.events, ...p2Parsed.events];
+      assert(combined.length === allParsed.events.length, `Expected ${allParsed.events.length} events, got ${combined.length}`);
+      
+      const allIds = allParsed.events.map((e: any) => e.id);
+      const combinedIds = combined.map((e: any) => e.id);
+      assert(JSON.stringify(allIds) === JSON.stringify(combinedIds), 'Pagination combined IDs do not match all events');
     }
   });
 
@@ -1787,6 +1846,170 @@ async function runTests() {
     const rendered = sanitizeMarkdown(todo.title);
     assert(!rendered.match(/^#/m), 'Raw heading must not survive sanitizeMarkdown');
     assert(!rendered.includes('```'), 'Raw code fence must not survive sanitizeMarkdown');
+  });
+
+  // =========================================================================
+  // 21. synccontext Coordination Tool
+  // =========================================================================
+  console.log('\n──────────────────────────────────────────');
+  console.log('21. synccontext Coordination Tool');
+  console.log('──────────────────────────────────────────');
+
+  await test('synccontext returns status prompt and syncs when confirm_sync is true', async () => {
+    const SYNC_PROJECT = 'test-sync-project';
+    const SESS_A = 'sess-sync-a';
+    const SESS_B = 'sess-sync-b';
+
+    const db = getDb();
+    db.prepare('INSERT OR IGNORE INTO projects (id, name) VALUES (?, ?)').run(SYNC_PROJECT, SYNC_PROJECT);
+    
+    // Register session A (active peer) and session B (target session)
+    registerSession(SYNC_PROJECT, SESS_A, 'Cursor');
+    registerSession(SYNC_PROJECT, SESS_B, 'Claude');
+
+    // Create rules, decisions, and memories for SESS_A
+    appendEvent(SYNC_PROJECT, SESS_A, 'RULE_ADDED', { rule_id: 'test-rule-1', content: 'Always write tests' });
+    appendEvent(SYNC_PROJECT, SESS_A, 'DECISION_RECORDED', { decision_id: 'test-dec-1', title: 'Use Sqlite', context: 'need local db', decision: 'we chose SQLite' });
+    
+    // Insert a memory directly into the DB associated with SESS_A
+    db.prepare(`
+      INSERT INTO memories (project_id, type, content, session_id, importance)
+      VALUES (?, 'decision', 'SQLite was chosen for local persistence', ?, 0.9)
+    `).run(SYNC_PROJECT, SESS_A);
+
+    // Create a TODO and let Session A claim it
+    const todoId = getNextSequenceValue(SYNC_PROJECT, 'todo');
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CREATED', { todo_id: todoId, title: 'Sync-target task', priority: 'medium' });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId, session_id: SESS_A });
+
+    // Create a second TODO, claim it, and complete it to verify completed claims are not transferred
+    const todoId2 = getNextSequenceValue(SYNC_PROJECT, 'todo');
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CREATED', { todo_id: todoId2, title: 'Completed sync-target task', priority: 'medium' });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_CLAIMED', { todo_id: todoId2, session_id: SESS_A });
+    appendEvent(SYNC_PROJECT, SESS_A, 'TODO_COMPLETED', { todo_id: todoId2 });
+
+    // Set A's event seen marker
+    db.prepare('UPDATE sessions SET last_event_seen = 42 WHERE id = ?').run(SESS_A);
+
+    // Set SESS_A's heartbeat in the past so sync is allowed (avoiding the fresh peer check)
+    db.prepare('UPDATE sessions SET last_heartbeat = ? WHERE id = ?')
+      .run(getCurrentTimestamp() - 30, SESS_A);
+
+    // Verify claim starts with SESS_A
+    let state = materializeProject(SYNC_PROJECT, false);
+    assert(state.todos[todoId].claimed_by === SESS_A, 'TODO should be claimed by SESS_A initially');
+
+    // 1. Check synccontext without confirm_sync (check status)
+    const resultCheck = await handleCoordinationTool('synccontext', {
+      project_id: SYNC_PROJECT,
+      session_id: SESS_B
+    }, SYNC_PROJECT);
+
+    assert(resultCheck.content !== undefined, 'Result check content should exist');
+    assert(resultCheck.content[0].text.includes('Detected active peer'), 'Expected peer detection prompt');
+    assert(resultCheck.content[0].text.includes('sess-sync-a'), 'Expected peer session id in prompt');
+
+    // 2. Perform sync by passing confirm_sync: true
+    const resultSync = await handleCoordinationTool('synccontext', {
+      project_id: SYNC_PROJECT,
+      session_id: SESS_B,
+      confirm_sync: true
+    }, SYNC_PROJECT);
+
+    const syncText = resultSync.content[0].text;
+    assert(resultSync.content !== undefined, 'Result sync content should exist');
+    assert(syncText.includes('Successfully synchronized'), 'Expected success confirmation');
+    
+    // Verify that rules, decisions, and memories of the peer are returned in the payload
+    assert(syncText.includes('Always write tests'), 'Expected peer rules in sync payload');
+    assert(syncText.includes('we chose SQLite'), 'Expected peer decisions in sync payload');
+    assert(syncText.includes('SQLite was chosen for local persistence'), 'Expected peer memories in sync payload');
+
+    // 3. Verify that the claim was transferred to SESS_B in database
+    invalidateProjectCache(SYNC_PROJECT);
+    state = materializeProject(SYNC_PROJECT, false);
+    assert(state.todos[todoId].claimed_by === SESS_B, `Expected claim to be transferred to ${SESS_B}, got: ${state.todos[todoId].claimed_by}`);
+    assert(state.todos[todoId2].claimed_by !== SESS_B, `Expected completed claim to not be transferred to ${SESS_B}`);
+
+    // Verify that both TODO_UNCLAIMED (by SESS_A) and TODO_CLAIMED (by SESS_B) events were written to the store
+    const events = db.prepare('SELECT type, session_id FROM events WHERE project_id = ? ORDER BY id DESC').all(SYNC_PROJECT) as Array<{ type: string, session_id: string }>;
+    const lastBroadcast = events[0];
+    const lastClaim = events[1];
+    const lastUnclaim = events[2];
+    assert(lastBroadcast.type === 'BROADCAST' && lastBroadcast.session_id === SESS_B, 'Expected broadcast event at the end');
+    assert(lastClaim.type === 'TODO_CLAIMED' && lastClaim.session_id === SESS_B, 'Expected TODO_CLAIMED event for SESS_B');
+    assert(lastUnclaim.type === 'TODO_UNCLAIMED' && lastUnclaim.session_id === SESS_A, 'Expected TODO_UNCLAIMED event for SESS_A');
+
+    // 4. Verify SESS_B's timeline pointer is aligned in DB (includes the broadcast event created during sync)
+    const sessBRow = db.prepare('SELECT last_event_seen FROM sessions WHERE id = ?').get(SESS_B) as { last_event_seen: number };
+    // The timeline should have been updated past the original 42 to include the broadcast event
+    assert(sessBRow.last_event_seen > 42, `Expected SESS_B timeline to advance past 42 to include broadcast, got: ${sessBRow.last_event_seen}`);
+
+    // 5. Verify that fresh heartbeat peer prevents sync
+    db.prepare('UPDATE sessions SET last_heartbeat = ? WHERE id = ?').run(getCurrentTimestamp(), SESS_A);
+    try {
+      await handleCoordinationTool('synccontext', {
+        project_id: SYNC_PROJECT,
+        session_id: SESS_B,
+        confirm_sync: true
+      }, SYNC_PROJECT);
+      assert(false, 'Expected sync to fail because SESS_A heartbeat is fresh');
+    } catch (e: any) {
+      assert(e.message.includes('actively working'), `Expected active working error, got: ${e.message}`);
+    }
+  });
+
+  // =========================================================================
+  // 29. MCP RESOURCE RENDERING
+  // =========================================================================
+  console.log('──────────────────────────────────────────');
+  console.log('29. MCP Resource Rendering');
+  console.log('──────────────────────────────────────────');
+
+  await test('context resource rendering returns unified project markdown', async () => {
+    const RES_PROJECT = 'resource-test-proj';
+    const RES_SID = 'resource-sess';
+    registerSession(RES_PROJECT, RES_SID, 'claude-3');
+
+    // Create a TODO
+    const todoId = getNextSequenceValue(RES_PROJECT, 'todo');
+    appendEvent(RES_PROJECT, RES_SID, 'TODO_CREATED', { todo_id: todoId, title: 'Context-test task', priority: 'high' });
+
+    const result = await handleReadResource(`butler://projects/${RES_PROJECT}/context`);
+    assert(result.contents !== undefined, 'Result contents should exist');
+    assert(result.contents[0].mimeType === 'text/markdown', 'Expected markdown mimeType');
+    const mdText = result.contents[0].text;
+    assert(mdText.includes('Context-test task'), 'Expected TODO title in markdown');
+    assert(mdText.includes(RES_SID), 'Expected session ID in markdown');
+  });
+
+  await test('orchestration checkpoints resource returns serialized thread state', async () => {
+    const ORCH_PROJECT = 'orch-test-proj';
+    const threadId = `${ORCH_PROJECT}-thread-abc`;
+    const checkpointId = 'test-checkpoint-uuid';
+
+    const db = getDb();
+    // Insert mock checkpoint and metadata into DB
+    db.prepare(`
+      INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata)
+      VALUES (?, '', ?, NULL, 'state', ?, ?)
+    `).run(
+      threadId,
+      checkpointId,
+      Buffer.from(JSON.stringify({ v: 1, channel_values: { result: 'success' } }), 'utf-8'),
+      Buffer.from(JSON.stringify({ step: 1 }), 'utf-8')
+    );
+
+    const result = await handleReadResource(`butler://projects/${ORCH_PROJECT}/orchestration`);
+    assert(result.contents !== undefined, 'Result contents should exist');
+    assert(result.contents[0].mimeType === 'application/json', 'Expected JSON mimeType');
+    
+    const parsed = JSON.parse(result.contents[0].text);
+    assert(Array.isArray(parsed), 'Expected orchestration result to be an array');
+    assert(parsed.length === 1, 'Expected 1 checkpoint row');
+    assert(parsed[0].thread_id === threadId, 'Expected matching thread_id');
+    assert(parsed[0].checkpoint.channel_values.result === 'success', 'Expected parsed checkpoint object');
+    assert(parsed[0].metadata.step === 1, 'Expected parsed metadata object');
   });
 
   // =========================================================================

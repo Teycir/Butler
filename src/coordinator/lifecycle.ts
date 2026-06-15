@@ -198,7 +198,9 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
         appendEvent(row.project_id, row.id, 'SESSION_STALE', { session_id: row.id, timestamp: now });
       }
     })();
-    for (const row of staleRows) invalidateProjectCache(row.project_id);
+    const projectsToInvalidateStale = new Set<string>();
+    for (const row of staleRows) projectsToInvalidateStale.add(row.project_id);
+    for (const pid of projectsToInvalidateStale) invalidateProjectCache(pid);
 
     // 2. alive|stale → dead (heartbeat timeout exceeded)
     const deadRows = db.prepare(`
@@ -216,7 +218,9 @@ export function startLifecycleMonitor(checkIntervalMs = 15000): void {
         updateLastEventSeen(row.id, event.id);
       }
     })();
-    for (const row of deadRows) invalidateProjectCache(row.project_id);
+    const projectsToInvalidateDead = new Set<string>();
+    for (const row of deadRows) projectsToInvalidateDead.add(row.project_id);
+    for (const pid of projectsToInvalidateDead) invalidateProjectCache(pid);
 
     // 3. Periodic snapshot check
     if (now - lastSnapshotTime >= SNAPSHOT_CHECK_INTERVAL_SECS) {

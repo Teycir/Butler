@@ -122,7 +122,49 @@ export function searchMemories(
   // Fetch recent memories, skipping the embedding BLOB when no dense query
   // vector is provided — avoids deserializing large BLOBs for TF-IDF-only searches.
   const skipEmbedding = !queryEmbedding;
-  const memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, skipEmbedding);
+  let memories: MemoryRecord[] = [];
+  
+  if (skipEmbedding) {
+    const db = getDb();
+    const keywords = query
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .split(/\s+/)
+      .filter(w => w.length >= 3)
+      .slice(0, 5); // limit query parameters to prevent SQL complexity
+
+    if (keywords.length > 0) {
+      const matchQuery = keywords.map(kw => `"${kw.replace(/"/g, '""')}"*`).join(' OR ');
+      const rows = db.prepare(`
+        SELECT m.id, m.project_id, m.type, m.content, m.source_ref, m.source_event_id, m.session_id, m.importance, m.created_at
+        FROM memories m
+        JOIN memories_fts f ON m.id = f.rowid
+        WHERE m.project_id = ? AND memories_fts MATCH ?
+        ORDER BY m.id DESC LIMIT ?
+      `).all(projectId, matchQuery, MEMORY_SEARCH_LIMIT) as any[];
+
+      memories = rows.map(r => ({
+        id: Number(r.id),
+        project_id: r.project_id,
+        type: r.type as any,
+        content: r.content,
+        source_ref: r.source_ref ?? null,
+        source_event_id: r.source_event_id ? Number(r.source_event_id) : null,
+        session_id: r.session_id ?? null,
+        embedding: null,
+        importance: Number(r.importance),
+        created_at: Number(r.created_at)
+      }));
+    }
+
+    // If no keywords matched or query was too short, fallback to general getMemories
+    if (memories.length === 0) {
+      memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, true);
+    }
+  } else {
+    memories = getMemories(projectId, MEMORY_SEARCH_LIMIT, false);
+  }
+
   if (memories.length === 0) return [];
 
   const docs: SearchableDocument[] = memories.map(m => ({

@@ -49,13 +49,6 @@ export function getEvents(projectId: string, sinceEventId: number = 0): EventRec
   }));
 }
 
-/**
- * Returns all events for a project since a given event ID, across all sessions.
- * Used for diff generation (Phase 2.2).
- */
-export function getEventsSince(projectId: string, sinceEventId: number): EventRecord[] {
-  return getEvents(projectId, sinceEventId);
-}
 
 export function getSessionEvents(projectId: string, sessionId: string, sinceEventId: number = 0): EventRecord[] {
   const db = getDb();
@@ -84,7 +77,7 @@ export function getSessionEvents(projectId: string, sessionId: string, sinceEven
 export function getNextSequenceValue(projectId: string, name: string): number {
   const db = getDb();
   
-  const incrementTx = db.transaction(() => {
+  const execute = () => {
     db.prepare(`
       INSERT OR IGNORE INTO sequences (project_id, name, next_value)
       VALUES (?, ?, 0)
@@ -103,8 +96,16 @@ export function getNextSequenceValue(projectId: string, name: string): number {
     `).get(projectId, name) as any;
     
     return Number(row.next_value);
-  });
+  };
+
+  // If already in an active transaction, run the queries directly.
+  // better-sqlite3 does support nested transactions via savepoints, but running 
+  // directly avoids unnecessary savepoint overhead and nested transaction concerns.
+  if (db.inTransaction) {
+    return execute();
+  }
   
+  const incrementTx = db.transaction(execute);
   return incrementTx();
 }
 

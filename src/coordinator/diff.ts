@@ -76,6 +76,10 @@ function summariseEvent(type: string, sessionId: string, payload: any): string |
     }
     case 'TODO_DELETED':
       return `TODO ${payload.todo_id} deleted`;
+    case 'TODO_CLAIMED':
+      return `TODO ${payload.todo_id} claimed by session "${payload.session_id}"`;
+    case 'TODO_UNCLAIMED':
+      return `TODO ${payload.todo_id} claim released by session "${payload.session_id}"`;
     case 'WIKI_UPDATED':
       return `Wiki page updated: "${payload.topic}"`;
     case 'RULE_ADDED':
@@ -95,7 +99,9 @@ function summariseEvent(type: string, sessionId: string, payload: any): string |
     case 'SESSION_RECOVERED':
       return `Session recovered: ${sessionId}`;
     default:
-      return null; // heartbeats, memory events, snapshots — skip
+      // MESSAGE_SENT and BROADCAST events are intentionally omitted here to filter out high-volume
+      // coordination communication noise that doesn't directly mutate the core project state.
+      return null; // heartbeats, memory events, snapshots, message/broadcast events — skip
   }
 }
 

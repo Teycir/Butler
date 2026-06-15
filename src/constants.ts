@@ -23,8 +23,9 @@ export const SNAPSHOT_RETENTION_COUNT = 3;
  *
  * History:
  *   1 — initial schema (todos, wiki, rules, decisions, handoffs, lastEventId)
+ *   2 — added conflicts, messages, broadcasts (Phase 3)
  */
-export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const SNAPSHOT_SCHEMA_VERSION = 2; // BUMP ME: If you modify ProjectState in src/events/materializer.ts, you MUST increment this version
 
 // Memory and search limits
 export const MEMORY_SEARCH_LIMIT = 500;
@@ -37,6 +38,8 @@ export const BROADCAST_HISTORY_LIMIT = 20;
 
 // Coordination thresholds
 export const CONFLICT_WINDOW_SECS = 10; // concurrent write window for conflict detection
+export const PEER_LIVENESS_TTL_SECONDS = 60; // time window in seconds for peer sessions to be considered active
+export const PEER_ACTIVE_LOCK_SECONDS = 10; // time window in seconds to lock sync action if peer has recent activity
 
 // Resource scoring thresholds
 export const MEMORY_RELEVANCE_THRESHOLD = 0.3; // minimum score to surface a memory in /context

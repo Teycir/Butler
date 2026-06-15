@@ -177,10 +177,10 @@ export async function handleKnowledgeTool(
       // Phase 2.4 — quality score feedback
       const score = computeHandoffQualityScore(summary);
       const feedback = score < 0.4
-        ? `\n⚠️  Handoff quality: ${Math.round(score * 100)}% — too brief. Add what changed, what's blocked, and key decisions.`
+        ? `\n⚠️  Handoff quality: low (too brief). Add what changed, what's blocked, and key decisions.`
         : score >= 0.8
-          ? `\n✅ Handoff quality: ${Math.round(score * 100)}% — well-structured.`
-          : `\n📊 Handoff quality: ${Math.round(score * 100)}%.`;
+          ? `\n✅ Handoff quality: excellent (well-structured).`
+          : `\n📊 Handoff quality: satisfactory.`;
 
       const event = appendEvent(projectId, String(args.session_id), 'HANDOFF_CREATED', {
         session_id: String(args.session_id),

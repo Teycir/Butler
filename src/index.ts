@@ -32,10 +32,14 @@ async function main() {
         const db = getDb();
         const projects = db.prepare('SELECT id FROM projects').all() as any[];
         for (const project of projects) {
-          materializeProject(project.id, true);
+          try {
+            materializeProject(project.id, true);
+          } catch (projError) {
+            console.error(`Snapshot on shutdown failed for project "${project.id}":`, projError);
+          }
         }
       } catch (e) {
-        console.error('Snapshot on shutdown failed:', e);
+        console.error('Snapshot on shutdown failed to retrieve projects:', e);
       }
       
       closeDatabase();

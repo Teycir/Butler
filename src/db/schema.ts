@@ -90,6 +90,27 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id, type);
+
+-- FTS5 Virtual Table for full-text search of memories content
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  content,
+  content='memories',
+  content_rowid='id'
+);
+
+-- Triggers to sync memories FTS index automatically
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+  INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+END;
 `;
 
 // ─── Versioned migrations ─────────────────────────────────────────────────────
@@ -157,12 +178,68 @@ export const VERSIONED_MIGRATIONS: Migration[] = [
       `DROP INDEX IF EXISTS idx_memories_session`,
       `DROP INDEX IF EXISTS idx_memories_source_ref`
     ]
+  },
+  {
+    version:     7,
+    description: 'Create checkpoints and writes tables for LangGraph checkpoint saving',
+    up: [
+      `CREATE TABLE IF NOT EXISTS checkpoints (
+        thread_id TEXT NOT NULL,
+        checkpoint_ns TEXT NOT NULL DEFAULT '',
+        checkpoint_id TEXT NOT NULL,
+        parent_checkpoint_id TEXT,
+        type TEXT,
+        checkpoint BLOB,
+        metadata BLOB,
+        PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS writes (
+        thread_id TEXT NOT NULL,
+        checkpoint_ns TEXT NOT NULL DEFAULT '',
+        checkpoint_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        channel TEXT NOT NULL,
+        type TEXT,
+        value BLOB,
+        PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_checkpoints_thread ON checkpoints(thread_id, checkpoint_ns)`,
+      `CREATE INDEX IF NOT EXISTS idx_writes_thread ON writes(thread_id, checkpoint_ns)`
+    ],
+    rollback: [
+      `DROP INDEX IF EXISTS idx_checkpoints_thread`,
+      `DROP INDEX IF EXISTS idx_writes_thread`,
+      `DROP TABLE IF EXISTS checkpoints`,
+      `DROP TABLE IF EXISTS writes`
+    ]
+  },
+  {
+    version:     8,
+    description: 'Create memories_fts virtual table and triggers for FTS5 full-text search',
+    up: [
+      `CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        content,
+        content='memories',
+        content_rowid='id'
+      )`,
+      `INSERT INTO memories_fts(rowid, content) SELECT id, content FROM memories`,
+      `CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+      END`,
+      `CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+      END`,
+      `CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+      END`
+    ],
+    rollback: [
+      `DROP TRIGGER IF EXISTS memories_ai`,
+      `DROP TRIGGER IF EXISTS memories_ad`,
+      `DROP TRIGGER IF EXISTS memories_au`,
+      `DROP TABLE IF EXISTS memories_fts`
+    ]
   }
-  // ── Add future migrations below this line ────────────────────────────────────
-  // {
-  //   version:     6,
-  //   description: 'Short description of what changes and why',
-  //   up:          ['ALTER TABLE ...'],
-  //   rollback:    []
-  // }
 ];

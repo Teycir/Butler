@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { MAX_INPUT_LENGTH, MAX_TITLE_LENGTH } from './constants.js';
+import { MAX_INPUT_LENGTH, MAX_TITLE_LENGTH, SYSTEM_SESSION_ID } from './constants.js';
 
 export function validateProjectId(projectId: string): void {
   if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) {
@@ -11,6 +11,12 @@ export function validateProjectId(projectId: string): void {
 }
 
 export function validateSessionId(sessionId: string): void {
+  if (sessionId === SYSTEM_SESSION_ID) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Invalid session_id. The identifier '${SYSTEM_SESSION_ID}' is reserved for system events.`
+    );
+  }
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
     throw new McpError(
       ErrorCode.InvalidParams,

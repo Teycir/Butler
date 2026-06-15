@@ -20,6 +20,7 @@ import { getDb } from '../../db/database.js';
 import { validateSession, updateLastEventSeen, getActiveSessions } from '../../coordinator/lifecycle.js';
 import { sanitizeInput } from '../../validation.js';
 import { now as getCurrentTimestamp, CONFLICT_WINDOW_SECS } from '../../constants.js';
+import { handleSyncContext } from './coordination/sync.js';
 
 export const coordinationToolDefs = [
   {
@@ -82,6 +83,19 @@ export const coordinationToolDefs = [
         content: { type: 'string', description: 'Broadcast message content (max 1024 chars)' }
       },
       required: ['project_id', 'session_id', 'content']
+    }
+  },
+  {
+    name: 'synccontext',
+    description: 'Detects active peer AI sessions and synchronizes workspace context on-demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Unique project identifier' },
+        session_id: { type: 'string', description: 'Your session ID' },
+        confirm_sync: { type: 'boolean', description: 'Pass true to accept the sync and align contexts, false or omit to check status.' }
+      },
+      required: ['project_id', 'session_id']
     }
   }
 ] as const;
@@ -228,6 +242,10 @@ export async function handleCoordinationTool(
           text: `Broadcast sent. (Event ID: ${event.id})${recipientNote}`
         }]
       };
+    }
+
+    case 'synccontext': {
+      return handleSyncContext(args, projectId);
     }
 
     default:
