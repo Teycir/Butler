@@ -469,7 +469,14 @@ See `skills/butler-workflow/SKILL.md` for full documentation and examples.
 
 ## 🤖 Zero-Intervention Automation
 
-Butler is designed to operate completely in the background with **minimal to no human intervention**. By automating project discovery, session lifecycles, and context handoffs, you and your agents can focus entirely on development.
+Butler is designed to run completely in the background. **All you need to do is install the MCP server and copy the skill package to your agent folder. Butler handles the rest automatically.**
+
+When you open any directory to work:
+1. **Butler automatically configures the project** by creating `.butler/project.json` (derived from the directory name).
+2. **The agent automatically joins** and heartbeats in the background.
+3. **The agent automatically records context** and leaves a handoff on exit.
+
+You do not need to run any initialization commands or setup scripts. It just works.
 
 ### 1. Zero-Config Auto-Creation (`.butler/project.json`)
 To make onboarding effortless, Butler automatically handles project configuration:
