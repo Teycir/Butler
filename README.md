@@ -71,6 +71,23 @@ Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process e
 *   **Local-First Advocates:** Engineers seeking zero network leakages and absolute privacy.
 
 ### Why not alternatives?
+
+Unlike general-purpose agent memory platforms (which require hosted cloud APIs, external vector databases, or wrapping your code in framework SDKs), **Butler is a local-first developer utility**. It integrates directly with your existing workspace as a standard Model Context Protocol (MCP) server. Running a single `npx` command auto-configures your entire IDE stack (Cursor, Claude Desktop, VS Code, Zed) to instantly share project-level context, prevent concurrent file-editing conflicts, and persist active tasks directly within your repo's local SQLite database—with zero network leakage, zero dependencies, and zero setup latency.
+
+#### 1. Butler vs. Dedicated Agent Memory Systems
+
+| Dimension | Butler | Mem0 | Letta (MemGPT) | LangMem | Zep |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Primary Use Case** | **AI coding client memory & repo state coordination** | General-purpose personalization APIs | Long-running autonomous OS-like agents | LangGraph-native agent prompt refinement | Temporal context & enterprise data graphs |
+| **Local Footprint** | **0-Click Local SQLite** (stored inside the repository) | Hybrid Cloud API or self-hosted vector database | Local/Cloud server (requires separate Docker/process) | Cloud-first managed service by LangChain | Cloud-first or heavy Docker dependencies |
+| **MCP Native** | **Yes** (integrated in Claude Desktop, Cursor, VS Code, Zed) | No | No (uses custom REST/Websocket API) | No | No |
+| **IDE/CLI Auto-Install** | **Yes** (`npx butler-mcp install` auto-configures clients) | No | No | No | No |
+| **LangGraph Support** | **Yes** (Built-in SQLite checkpointer for LangGraph JS) | No | No | Yes (native SDK integration) | No |
+| **Concurrency Control**| **Yes** (Optimistic locking for parallel agents editing code) | No | No | No | No |
+| **Amnesia Prevention** | **Yes** (Maintains context state across IDE reloads/restarts) | No (Focuses on user memory, not project state) | Yes (for its own custom agents) | Yes (primarily via API state stores) | Yes (via temporal memory logs) |
+
+#### 2. Butler vs. Ad-hoc Storage & Databases
+
 | Dimension | Butler | Plain Text Files (`context.txt`) | Heavy DBs (Postgres/Redis) |
 | :--- | :--- | :--- | :--- |
 | **Portability** | 0-Click Local SQLite | Hard to version-control safely | Complex Docker setup |
