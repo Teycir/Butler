@@ -1,0 +1,84 @@
+# Butler
+
+> Local-first MCP server providing persistent, cross-tool shared memory and
+> multi-agent coordination for AI coding agents. State lives in a local
+> SQLite event log (`.butler/butler.db`), not inside any single vendor's
+> session — so a session in one client (e.g. Claude Code) can hand off to a
+> different client (e.g. Kiro CLI, Cursor) with zero lost context.
+
+## What this is for
+
+- An agent (or the user) runs out of usage/credits in one tool and wants to
+  resume in another tool without re-explaining the task.
+- Multiple agents (same tool or different tools) work the same repo
+  concurrently and need to avoid duplicate/conflicting edits.
+- A project needs durable TODOs, architectural decisions (ADRs), coding
+  rules, and a wiki that persist across IDE reloads and process restarts.
+- Multi-step agent orchestration (plan -> implement -> verify -> commit)
+  needs shared checkpoint state across stages that may run in different
+  tools.
+
+## Transport
+
+MCP server over stdio (JSON-RPC). Install via `npx butler-mcp install`
+(auto-configures Claude Desktop, Claude Code, Cursor, VS Code, Windsurf,
+Zed, Gemini CLI, Kiro CLI, Kilo Code) or manually per README.md.
+
+## Core loop for any connecting agent
+
+1. Call `projectlist` (or read `.butler/project.json`) to find/create the
+   project id.
+2. Call `sessionregister` with a unique `session_id` and your `client_type`.
+3. Read resource `butler://projects/{id}/context` to get TODOs, rules,
+   decisions, wiki, sessions, and any handoff left by a prior session
+   (possibly a different tool).
+4. Call `sessionheartbeat` every 15s while active.
+5. Before exiting: call `handoffcreate` with a summary, then
+   `sessiondisconnect`.
+
+## Tools (19)
+
+Session: `sessionregister`, `sessionheartbeat`, `sessiondisconnect`
+Tasks: `todoadd`, `todocomplete`, `todoupdate`, `tododelete`, `todolist`
+Coordination: `todoclaim`, `todounclaim`, `messagesend`, `broadcast`, `synccontext`
+Knowledge: `wikiupdate`, `ruleadd`, `ruleremove`, `decisionrecord`, `handoffcreate`
+Memory: `memorystore`, `memorysearch`, `memorydelete`, `projectlist`
+Observability: `eventsexport`, `butlerping`
+
+Full input schemas: see `src/mcp/tools/*.tools.ts` or call each tool's
+definition via the MCP `tools/list` method.
+
+## Resources (7)
+
+`butler://projects/{id}/context` (markdown context packet)
+`butler://projects/{id}/todos` (JSON)
+`butler://projects/{id}/wiki` (JSON)
+`butler://projects/{id}/sessions` (JSON)
+`butler://projects/{id}/memories` (JSON)
+`butler://projects/{id}/diff?since={eventId}` (JSON)
+`butler://projects/{id}/orchestration` (LangGraph checkpoints, JSON)
+
+## Machine-readable manifests
+
+- `server.json` — Official MCP Registry manifest (registry.modelcontextprotocol.io),
+  namespace `io.github.teycir/butler`, points at the `butler-mcp` npm package.
+- `.well-known/mcp/server-card.json` — full server card (tools, resources,
+  compatible clients, categories) per SEP-1649.
+- `.well-known/mcp.json` — discovery pointer per SEP-1960.
+- `package.json` has `mcpName: "io.github.teycir/butler"` for npm-side
+  ownership verification against the registry entry.
+- README.md carries an `<!-- mcp-name: io.github.teycir/butler -->` marker
+  required by the Official MCP Registry's ownership check.
+
+## Docs
+
+- README.md — full setup, use cases, architecture, tool/resource reference
+- docs/architecture.md — system design detail
+- docs/concepts.md — event sourcing / materialized state model
+- docs/workflows-best-practices.md — recommended agent workflows
+- CHANGELOG.md — version history
+- skills/butler-workflow/SKILL.md — portable agent skill teaching the core loop above
+
+## Repo
+
+https://github.com/Teycir/Butler

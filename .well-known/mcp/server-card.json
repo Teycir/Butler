@@ -1,0 +1,48 @@
+{
+  "name": "io.github.teycir/butler",
+  "title": "Butler",
+  "description": "Local-first MCP server giving AI coding agents persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log. A session in one client (e.g. Claude Code) can hand off to a different client (e.g. Kiro CLI, Cursor) with zero lost context.",
+  "version": "1.2.0",
+  "homepage": "https://github.com/Teycir/Butler#readme",
+  "repository": "https://github.com/Teycir/Butler",
+  "license": "MIT",
+  "author": {
+    "name": "Teycir Ben Soltane",
+    "url": "https://teycirbensoltane.tn"
+  },
+  "transport": ["stdio"],
+  "install": {
+    "npm": "npx butler-mcp install"
+  },
+  "capabilities": {
+    "tools": true,
+    "resources": true,
+    "prompts": false
+  },
+  "toolCount": 19,
+  "resourceCount": 7,
+  "tools": [
+    "sessionregister", "sessionheartbeat", "sessiondisconnect",
+    "todoadd", "todocomplete", "todoupdate", "tododelete", "todolist",
+    "todoclaim", "todounclaim", "messagesend", "broadcast", "synccontext",
+    "wikiupdate", "ruleadd", "ruleremove", "decisionrecord", "handoffcreate",
+    "memorystore", "memorysearch", "memorydelete", "projectlist",
+    "eventsexport", "butlerping"
+  ],
+  "resources": [
+    "butler://projects/{id}/context",
+    "butler://projects/{id}/todos",
+    "butler://projects/{id}/wiki",
+    "butler://projects/{id}/sessions",
+    "butler://projects/{id}/memories",
+    "butler://projects/{id}/diff",
+    "butler://projects/{id}/orchestration"
+  ],
+  "compatibleClients": [
+    "Claude Desktop", "Claude Code", "Cursor", "VS Code",
+    "Windsurf", "Zed", "Gemini CLI", "Kiro CLI", "Kilo Code"
+  ],
+  "categories": ["developer-tools", "agent-coordination", "memory", "multi-agent"],
+  "storage": "local-sqlite",
+  "cloudRequired": false
+}

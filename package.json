@@ -1,7 +1,15 @@
 {
   "name": "butler-mcp",
   "version": "1.2.0",
-  "description": "Persistent shared memory and coordination layer for AI coding agents",
+  "description": "Local-first MCP server giving AI coding agents (Claude Code, Claude Desktop, Cursor, Kiro CLI, VS Code, Windsurf, Zed) persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log — resume in one tool exactly where another left off.",
+  "homepage": "https://github.com/Teycir/Butler#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Teycir/Butler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Teycir/Butler/issues"
+  },
   "main": "dist/index.js",
   "bin": {
     "butler": "./dist/cli/main.js",
@@ -22,12 +30,34 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
     "agent-coordination",
-    "memory"
+    "multi-agent",
+    "memory",
+    "shared-memory",
+    "cross-tool-memory",
+    "ai-agent-memory",
+    "agent-handoff",
+    "session-continuity",
+    "claude-code",
+    "claude-desktop",
+    "cursor",
+    "kiro-cli",
+    "windsurf",
+    "vscode",
+    "zed",
+    "langgraph",
+    "langgraph-checkpointer",
+    "sqlite",
+    "event-sourcing",
+    "local-first",
+    "todo-coordination",
+    "ai-pair-programming"
   ],
   "author": "Teycir Ben Soltane <teycir@pxdmail.net>",
   "license": "ISC",
+  "mcpName": "io.github.teycir/butler",
   "dependencies": {
     "@langchain/core": "^1.1.49",
     "@langchain/langgraph": "^1.4.2",

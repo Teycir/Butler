@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.teycir/butler",
+  "title": "Butler",
+  "description": "Local-first MCP server giving AI coding agents persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log.",
+  "repository": {
+    "url": "https://github.com/Teycir/Butler",
+    "source": "github"
+  },
+  "version": "1.2.0",
+  "websiteUrl": "https://github.com/Teycir/Butler#readme",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "butler-mcp",
+      "version": "1.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BUTLER_DB_PATH",
+          "description": "Absolute path to the Butler SQLite database file (default: ~/.butler/butler.db)",
+          "isRequired": false
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "categories": ["developer-tools", "agent-coordination", "memory"],
+      "capabilities": {
+        "tools": 19,
+        "resources": 7,
+        "transport": "stdio"
+      },
+      "compatibleClients": [
+        "Claude Desktop",
+        "Claude Code",
+        "Cursor",
+        "VS Code",
+        "Windsurf",
+        "Zed",
+        "Gemini CLI",
+        "Kiro CLI",
+        "Kilo Code"
+      ]
+    }
+  }
+}

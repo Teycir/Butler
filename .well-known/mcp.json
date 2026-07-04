@@ -1,0 +1,11 @@
+{
+  "mcp_server": {
+    "name": "io.github.teycir/butler",
+    "server_card": "/.well-known/mcp/server-card.json",
+    "official_registry_manifest": "/server.json",
+    "transport": {
+      "type": "stdio"
+    },
+    "authentication": "none"
+  }
+}

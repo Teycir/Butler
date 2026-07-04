@@ -1,10 +1,51 @@
 # 🌐 Butler
 
+<!-- mcp-name: io.github.teycir/butler -->
+
 ![Butler](public/butler_banner.gif)
 
 > **Persistent Coordination and Memory Layer for AI Coding Agents.**
 >
 > *"Simple like Git. Persistent like Notion. Collaborative like Figma. AI-Native like Cursor."*
+
+---
+
+<details>
+<summary><strong>🤖 For AI agents: quick server summary (expand)</strong></summary>
+
+```yaml
+name: io.github.teycir/butler
+package: butler-mcp (npm)
+transport: stdio (MCP JSON-RPC)
+storage: local SQLite (.butler/butler.db) — no cloud, cross-tool by design
+install: npx butler-mcp install
+core_loop: projectlist -> sessionregister -> read butler://projects/{id}/context ->
+  sessionheartbeat every 15s -> handoffcreate + sessiondisconnect on exit
+tools:
+  session: [sessionregister, sessionheartbeat, sessiondisconnect]
+  tasks: [todoadd, todocomplete, todoupdate, tododelete, todolist]
+  coordination: [todoclaim, todounclaim, messagesend, broadcast, synccontext]
+  knowledge: [wikiupdate, ruleadd, ruleremove, decisionrecord, handoffcreate]
+  memory: [memorystore, memorysearch, memorydelete, projectlist]
+  observability: [eventsexport, butlerping]
+resources:
+  - butler://projects/{id}/context        # markdown packet: TODOs, rules, decisions, wiki, handoffs
+  - butler://projects/{id}/todos          # JSON
+  - butler://projects/{id}/wiki           # JSON
+  - butler://projects/{id}/sessions       # JSON
+  - butler://projects/{id}/memories       # JSON
+  - butler://projects/{id}/diff?since={eventId}  # JSON changelog
+  - butler://projects/{id}/orchestration  # LangGraph checkpoints, JSON
+manifests:
+  - server.json                          # Official MCP Registry manifest
+  - .well-known/mcp/server-card.json     # SEP-1649 server card
+  - .well-known/mcp.json                 # SEP-1960 discovery pointer
+  - llms.txt                             # plain-text agent summary
+```
+
+Full schemas: `src/mcp/tools/*.tools.ts`, or query `tools/list` over MCP. See [Discovery & Registries](#-discovery--registries) for where this server is indexed.
+
+</details>
 
 ---
 
@@ -17,6 +58,26 @@
 
 ---
 
+## 🎯 Use Cases
+
+Butler's core value isn't just that an agent *remembers* — it's that the memory is **portable across completely different AI tools**, because it lives in a shared local SQLite file rather than inside any one vendor's session. That's what makes cross-tool continuity possible in the first place.
+
+| Scenario | What happens without Butler | What Butler does |
+| :--- | :--- | :--- |
+| **Claude Code runs out of credits mid-task** | You switch to Kiro CLI (or Cursor, or anything else) and it starts from zero — no idea what Claude Code already did | Kiro CLI registers a session, reads `butler://projects/{id}/context`, and picks up exactly where Claude Code left off: the same TODOs, rules, decisions, and the `handoffcreate` summary Claude Code recorded before running out |
+| **Planning in one tool, implementing in another** (e.g. plan in Claude Desktop, implement in Cursor) | The implementing tool starts cold — no idea what was decided or done | The new session reads `/context` and instantly gets the prior session's handoff summary, open TODOs, and rules — regardless of which vendor built either tool |
+| **Two agents (possibly different tools) editing the same repo concurrently** | Silent overwrites or duplicated work on the same task | `todoclaim`/`todounclaim` mark tasks as in-progress across tools; `todocomplete`/`todoupdate` use optimistic version locks and emit a `TODO_CONFLICT` event if two sessions touch the same TODO within seconds |
+| **An agent crashes or the terminal is closed** | Its in-progress claims stay locked forever; no record of what it was doing | The lifecycle monitor marks the session `stale` after 60s, `dead` after 5 minutes, auto-releases its claims, and synthesizes an ungraceful handoff for whichever tool picks it up next |
+| **Coordinating a large refactor across sessions/tools** | Agents don't know what their peers (on other tools) are touching | `messagesend` for direct heads-up between two sessions, `broadcast` for announcements to everyone, both surfaced in the next `/context` read regardless of client |
+| **Recording *why* a design decision was made** | Rationale lives only in one tool's chat history and gets lost when the window closes or credits run out | `decisionrecord` logs an ADR (context + outcome) directly into the durable, tool-agnostic event log and project wiki |
+| **Onboarding a new agent/session into an existing project** | Re-explaining architecture, constraints, and conventions from scratch every time — and again for every different tool you try | `ruleadd` persists coding guidelines every session must follow, on every client; `wikiupdate` builds a shared reference doc; both are pulled into `/context` automatically |
+| **Finding relevant past context without re-reading everything** | Manually grepping chat logs or the whole codebase — and chat logs from other tools aren't even accessible | `memorysearch` runs hybrid TF-IDF + recency ranking over stored summaries, decisions, rules, and wiki pages, shared by every connected tool |
+| **Auditing what happened in a project over time** | No structured history, just scattered chat transcripts split across whichever tools were used | `eventsexport` dumps the full append-only event log as JSON/NDJSON, filterable by session, type, or time range — one log, all tools |
+| **Multi-step agent orchestration** (e.g. Plan → Implement → Verify → Commit, each stage potentially a different tool) | Each phase runs in isolation with no shared checkpoint state | The built-in LangGraph checkpointer (`getLangGraphCheckpointer()`) persists thread state in the same SQLite DB, and `buildOrchestratorGraph` coordinates hand-offs between planning/implementing/verifying agents |
+| **Watching a live multi-agent, multi-tool workspace** | No visibility into who's doing what right now, especially across different clients | `butler tui` / `butler dashboard` show live sessions from every connected tool, claims, conflicts, and handoff quality in real time |
+
+---
+
 #### 🌟 Features Showcase
 
 | 🖥️ Live Orchestration Dashboard | 👤 Active Session Topology & Status |
@@ -24,23 +85,6 @@
 | ![Butler TUI Dashboard](public/tui_snapshot.jpg) | ![Active Session Topology](public/tui_session_topology.jpg) |
 | **⚡ Concurrency Mutation Conflicts** | **🤝 Handoff Quality Scorecard & Coaching** |
 | ![Mutation Conflicts](public/tui_conflict_alerting.jpg) | ![Handoff Quality Coaching](public/tui_handoff_coaching.jpg) |
-
----
-
-## 🎯 Use Cases
-
-| Scenario | What happens without Butler | What Butler does |
-| :--- | :--- | :--- |
-| **Switching clients mid-task** (e.g. plan in Claude Desktop, implement in Cursor) | The new client starts cold — no idea what was decided or done | New session reads `butler://projects/{id}/context` and instantly gets the prior session's `handoffcreate` summary, open TODOs, and rules |
-| **Two agents editing the same repo concurrently** | Silent overwrites or duplicated work on the same task | `todoclaim`/`todounclaim` mark tasks as in-progress; `todocomplete`/`todoupdate` use optimistic version locks and emit a `TODO_CONFLICT` event if two sessions touch the same TODO within seconds |
-| **An agent crashes or the terminal is closed** | Its in-progress claims stay locked forever; no record of what it was doing | The lifecycle monitor marks the session `stale` after 60s, `dead` after 5 minutes, auto-releases its claims, and synthesizes an ungraceful handoff |
-| **Coordinating a large refactor across sessions** | Agents don't know what their peers are touching | `messagesend` for direct heads-up between two sessions, `broadcast` for announcements to everyone, both surfaced in the next `/context` read |
-| **Recording *why* a design decision was made** | Rationale lives only in chat history and gets lost when the window closes | `decisionrecord` logs an ADR (context + outcome) directly into the durable event log and project wiki |
-| **Onboarding a new agent/session into an existing project** | Re-explaining architecture, constraints, and conventions from scratch every time | `ruleadd` persists coding guidelines every session must follow; `wikiupdate` builds a shared reference doc; both are pulled into `/context` automatically |
-| **Finding relevant past context without re-reading everything** | Manually grepping chat logs or the whole codebase | `memorysearch` runs hybrid TF-IDF + recency ranking over stored summaries, decisions, rules, and wiki pages |
-| **Auditing what happened in a project over time** | No structured history, just scattered chat transcripts | `eventsexport` dumps the full append-only event log as JSON/NDJSON, filterable by session, type, or time range |
-| **Multi-step agent orchestration** (e.g. Plan → Implement → Verify → Commit) | Each phase runs in isolation with no shared checkpoint state | The built-in LangGraph checkpointer (`getLangGraphCheckpointer()`) persists thread state in the same SQLite DB, and `buildOrchestratorGraph` coordinates hand-offs between planning/implementing/verifying agents |
-| **Watching a live multi-agent workspace** | No visibility into who's doing what right now | `butler tui` / `butler dashboard` show live sessions, claims, conflicts, and handoff quality in real time |
 
 ---
 
@@ -69,6 +113,7 @@
 - [Multi-Agent Orchestration & LangGraph Integration](#-multi-agent-orchestration--langgraph-integration)
 - [Repository Anatomy](#-repository-anatomy)
 - [Principles](#-principles)
+- [Discovery & Registries](#-discovery--registries)
 - [Related Projects](#-related-projects)
 
 ---
@@ -873,6 +918,11 @@ Butler/
 │   └── butler-workflow/   # Butler coordination patterns for AI agents
 ├── docs/              # Workflows, best practices, troubleshooting, architecture, concepts, changelog, recovery guides
 ├── install/           # install.sh / install.ps1 — build + multi-client auto-config
+├── .well-known/
+│   ├── mcp.json                # SEP-1960 discovery pointer
+│   └── mcp/server-card.json    # SEP-1649 server card
+├── server.json        # Official MCP Registry manifest
+├── llms.txt           # Plain-text agent-readable summary
 ├── package.json
 └── tsconfig.json
 ```
@@ -885,6 +935,35 @@ Butler/
 *   **0-Clicks Portability:** Vector indexers run on pure JavaScript TF-IDF token matching, eliminating the need for Python packages, heavy vector databases, or paid API keys.
 *   **Invisible Ergonomics:** The user never manages memory. The system simply remembers.
 *   **Active Contribution, Not Passive Reading:** Butler's server instructions coach every agent to write decisions, TODOs, rules, and handoffs — not just consume them. The shared brain only works if everyone feeds it.
+
+---
+
+## 🔎 Discovery & Registries
+
+Butler ships machine-readable manifests so AI agents and registry crawlers can find and evaluate it without parsing the full README:
+
+| File | Purpose |
+| :--- | :--- |
+| [`llms.txt`](llms.txt) | Plain-text summary for LLMs/agents: what it's for, core loop, tool/resource list, doc links |
+| [`server.json`](server.json) | [Official MCP Registry](https://registry.modelcontextprotocol.io) manifest under namespace `io.github.teycir/butler`, pointing at the `butler-mcp` npm package |
+| [`.well-known/mcp/server-card.json`](.well-known/mcp/server-card.json) | Full server card (tools, resources, compatible clients, categories) per the SEP-1649 draft convention |
+| [`.well-known/mcp.json`](.well-known/mcp.json) | Discovery pointer per the SEP-1960 draft convention |
+| `<!-- mcp-name: io.github.teycir/butler -->` (top of this README) | Ownership-verification marker required by the Official MCP Registry |
+| `package.json` → `mcpName` | Same namespace, declared npm-side so the registry can verify the published package matches `server.json` |
+
+**Publishing/updating the registry listing** (maintainer-only, requires [`mcp-publisher`](https://github.com/modelcontextprotocol/registry)):
+
+```bash
+# Authenticate once via GitHub (namespace io.github.teycir/*)
+mcp-publisher login github
+
+# Publish/update the listing from server.json at the repo root
+mcp-publisher publish server.json
+```
+
+Keep `server.json`'s `version` in sync with `package.json` on every release — the registry does not auto-detect new npm publishes.
+
+Butler is also discoverable through general-purpose MCP directories (mcp.so, Smithery, Glama, the `punkpeye/awesome-mcp-servers` GitHub list) once listed in the Official Registry, since several of them auto-ingest from it.
 
 ---
 
