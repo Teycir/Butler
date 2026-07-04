@@ -1,5 +1,5 @@
 {
-  "name": "io.github.teycir/butler",
+  "name": "io.github.Teycir/butler",
   "title": "Butler",
   "description": "Local-first MCP server giving AI coding agents persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log. A session in one client (e.g. Claude Code) can hand off to a different client (e.g. Kiro CLI, Cursor) with zero lost context.",
   "version": "1.2.0",
@@ -12,7 +12,8 @@
   },
   "transport": ["stdio"],
   "install": {
-    "npm": "npx butler-mcp install"
+    "mcpb": "https://github.com/Teycir/Butler/releases/latest",
+    "source": "git clone https://github.com/Teycir/Butler.git && bash install/install.sh"
   },
   "capabilities": {
     "tools": true,

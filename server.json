@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.teycir/butler",
+  "name": "io.github.Teycir/butler",
   "title": "Butler",
-  "description": "Local-first MCP server giving AI coding agents persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log.",
+  "description": "Cross-tool shared memory and multi-agent coordination for AI coding agents via local SQLite.",
   "repository": {
     "url": "https://github.com/Teycir/Butler",
     "source": "github"
@@ -11,10 +11,10 @@
   "websiteUrl": "https://github.com/Teycir/Butler#readme",
   "packages": [
     {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "butler-mcp",
+      "registryType": "mcpb",
+      "identifier": "https://github.com/Teycir/Butler/releases/download/v1.2.0/butler-mcp-linux-x64.mcpb",
       "version": "1.2.0",
+      "fileSha256": "7ce41638f92dbcb49bda2dcd1ffd3d49602b12c9f83255c6117b30e0b7278212",
       "transport": {
         "type": "stdio"
       },

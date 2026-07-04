@@ -1,6 +1,6 @@
 # 🌐 Butler
 
-<!-- mcp-name: io.github.teycir/butler -->
+<!-- mcp-name: io.github.Teycir/butler -->
 
 ![Butler](public/butler_banner.gif)
 
@@ -14,11 +14,11 @@
 <summary><strong>🤖 For AI agents: quick server summary (expand)</strong></summary>
 
 ```yaml
-name: io.github.teycir/butler
-package: butler-mcp (npm)
+name: io.github.Teycir/butler
+package: butler-mcp (.mcpb via GitHub Releases, no npm)
 transport: stdio (MCP JSON-RPC)
 storage: local SQLite (.butler/butler.db) — no cloud, cross-tool by design
-install: npx butler-mcp install
+install: download .mcpb from https://github.com/Teycir/Butler/releases/latest
 core_loop: projectlist -> sessionregister -> read butler://projects/{id}/context ->
   sessionheartbeat every 15s -> handoffcreate + sessiondisconnect on exit
 tools:
@@ -135,7 +135,7 @@ Coding agents are fundamentally **amnesiac**. When Cursor reloads or a process e
 
 ### Why not alternatives?
 
-Unlike general-purpose agent memory platforms (which require hosted cloud APIs, external vector databases, or wrapping your code in framework SDKs), **Butler is a local-first developer utility**. It integrates directly with your existing workspace as a standard Model Context Protocol (MCP) server. Running a single `npx` command auto-configures your entire IDE stack (Cursor, Claude Desktop, VS Code, Zed) to instantly share project-level context, prevent concurrent file-editing conflicts, and persist active tasks directly within your repo's local SQLite database—with zero network leakage, zero dependencies, and zero setup latency.
+Unlike general-purpose agent memory platforms (which require hosted cloud APIs, external vector databases, or wrapping your code in framework SDKs), **Butler is a local-first developer utility**. It integrates directly with your existing workspace as a standard Model Context Protocol (MCP) server. A single `.mcpb` install (or the bundled `install.sh`/`install.ps1` script) auto-configures your entire IDE stack (Cursor, Claude Desktop, VS Code, Zed) to instantly share project-level context, prevent concurrent file-editing conflicts, and persist active tasks directly within your repo's local SQLite database—with zero network leakage, zero dependencies, and zero setup latency.
 
 #### 1. Butler vs. Dedicated Agent Memory Systems
 
@@ -144,7 +144,7 @@ Unlike general-purpose agent memory platforms (which require hosted cloud APIs, 
 | **Primary Use Case** | **AI coding client memory & repo state coordination** | General-purpose personalization APIs | Long-running autonomous OS-like agents | LangGraph-native agent prompt refinement | Temporal context & enterprise data graphs |
 | **Local Footprint** | **0-Click Local SQLite** (stored inside the repository) | Hybrid Cloud API or self-hosted vector database | Local/Cloud server (requires separate Docker/process) | Cloud-first managed service by LangChain | Cloud-first or heavy Docker dependencies |
 | **MCP Native** | **Yes** (integrated in Claude Desktop, Cursor, VS Code, Zed) | No | No (uses custom REST/Websocket API) | No | No |
-| **IDE/CLI Auto-Install** | **Yes** (`npx butler-mcp install` auto-configures clients) | No | No | No | No |
+| **IDE/CLI Auto-Install** | **Yes** (`.mcpb` one-click, or `install.sh`/`install.ps1` auto-configures clients) | No | No | No | No |
 | **LangGraph Support** | **Yes** (Built-in SQLite checkpointer for LangGraph JS) | No | No | Yes (native SDK integration) | No |
 | **Concurrency Control**| **Yes** (Optimistic locking for parallel agents editing code) | No | No | No | No |
 | **Amnesia Prevention** | **Yes** (Maintains context state across IDE reloads/restarts) | No (Focuses on user memory, not project state) | Yes (for its own custom agents) | Yes (primarily via API state stores) | Yes (via temporal memory logs) |
@@ -160,15 +160,14 @@ Unlike general-purpose agent memory platforms (which require hosted cloud APIs, 
 
 ---
 
-## ⏱️ Quickstart in 30 Seconds (via npx)
+## ⏱️ Quickstart in 30 Seconds (via GitHub Release)
 
-The fastest way to install and configure Butler is via `npx`:
+Butler is distributed as a single `.mcpb` bundle attached to each [GitHub Release](https://github.com/Teycir/Butler/releases) — no npm package, no registry account needed:
 
-```bash
-npx butler-mcp install   # Scans and auto-configures all active clients (Claude, Cursor, VS Code, Zed, Windsurf, etc.)
-npx butler-mcp status    # Runs the visual status CLI
-npx butler-mcp dashboard # Runs the web dashboard
-```
+1. Download `butler-mcp-linux-x64.mcpb` from the [latest release](https://github.com/Teycir/Butler/releases/latest).
+2. Double-click it (or drag into Claude Desktop's Settings → Extensions) to install with one click.
+
+Currently Linux x64 only — see [Discovery & Registries](#-discovery--registries) below for why, and for the source-build path on other platforms.
 
 ---
 
@@ -945,23 +944,25 @@ Butler ships machine-readable manifests so AI agents and registry crawlers can f
 | File | Purpose |
 | :--- | :--- |
 | [`llms.txt`](llms.txt) | Plain-text summary for LLMs/agents: what it's for, core loop, tool/resource list, doc links |
-| [`server.json`](server.json) | [Official MCP Registry](https://registry.modelcontextprotocol.io) manifest under namespace `io.github.teycir/butler`, pointing at the `butler-mcp` npm package |
+| [`server.json`](server.json) | [Official MCP Registry](https://registry.modelcontextprotocol.io) manifest under namespace `io.github.Teycir/butler`, pointing at a GitHub Release-hosted `.mcpb` bundle (no npm package involved) |
 | [`.well-known/mcp/server-card.json`](.well-known/mcp/server-card.json) | Full server card (tools, resources, compatible clients, categories) per the SEP-1649 draft convention |
 | [`.well-known/mcp.json`](.well-known/mcp.json) | Discovery pointer per the SEP-1960 draft convention |
-| `<!-- mcp-name: io.github.teycir/butler -->` (top of this README) | Ownership-verification marker required by the Official MCP Registry |
-| `package.json` → `mcpName` | Same namespace, declared npm-side so the registry can verify the published package matches `server.json` |
+| `<!-- mcp-name: io.github.Teycir/butler -->` (top of this README) | Ownership-verification marker required by the Official MCP Registry |
+| [`manifest.json`](manifest.json) | [MCPB](https://github.com/modelcontextprotocol/mcpb) bundle manifest — packs Butler into a single `.mcpb` file attached to each [GitHub Release](https://github.com/Teycir/Butler/releases) for one-click desktop install |
+
+Butler is distributed entirely through GitHub — no npm package, no PyPI, no external registry account required. Each release attaches a `butler-mcp-linux-x64.mcpb` asset (built via `npx @anthropic-ai/mcpb pack`), and `server.json`'s `packages[0].identifier` points directly at that release asset URL with a `fileSha256` for integrity verification. Currently Linux x64 only, since `better-sqlite3` ships a platform-specific native binary; cross-platform bundles would need to be built on macOS/Windows separately.
 
 **Publishing/updating the registry listing** (maintainer-only, requires [`mcp-publisher`](https://github.com/modelcontextprotocol/registry)):
 
 ```bash
-# Authenticate once via GitHub (namespace io.github.teycir/*)
+# Authenticate once via GitHub (namespace io.github.Teycir/*)
 mcp-publisher login github
 
 # Publish/update the listing from server.json at the repo root
 mcp-publisher publish server.json
 ```
 
-Keep `server.json`'s `version` in sync with `package.json` on every release — the registry does not auto-detect new npm publishes.
+On every release: bump `version` in `manifest.json` and `server.json`, rebuild the `.mcpb` (`npx @anthropic-ai/mcpb pack . butler-mcp-linux-x64.mcpb`), attach it to the new GitHub Release, update `fileSha256` and the release-tag path in `server.json`, then re-run `mcp-publisher publish server.json` — the registry does not auto-detect new releases.
 
 Butler is also discoverable through general-purpose MCP directories (mcp.so, Smithery, Glama, the `punkpeye/awesome-mcp-servers` GitHub list) once listed in the Official Registry, since several of them auto-ingest from it.
 

@@ -1,0 +1,46 @@
+{
+  "manifest_version": "0.2",
+  "name": "butler-mcp",
+  "version": "1.2.0",
+  "display_name": "Butler",
+  "description": "Cross-tool shared memory and multi-agent coordination for AI coding agents via local SQLite.",
+  "long_description": "Local-first MCP server giving AI coding agents (Claude Code, Claude Desktop, Cursor, Kiro CLI, VS Code, Windsurf, Zed) persistent, cross-tool shared memory and multi-agent coordination via a local SQLite event log. Resume in one tool exactly where another left off.",
+  "author": {
+    "name": "Teycir Ben Soltane",
+    "email": "teycir@pxdmail.net",
+    "url": "https://github.com/Teycir"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Teycir/Butler.git"
+  },
+  "homepage": "https://github.com/Teycir/Butler#readme",
+  "documentation": "https://github.com/Teycir/Butler#readme",
+  "support": "https://github.com/Teycir/Butler/issues",
+  "license": "ISC",
+  "keywords": ["mcp-server", "agent-coordination", "multi-agent", "shared-memory", "sqlite", "langgraph"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "BUTLER_DB_PATH": "${user_config.butler_db_path}"
+      }
+    }
+  },
+  "user_config": {
+    "butler_db_path": {
+      "type": "string",
+      "title": "Database Path",
+      "description": "Absolute path to the Butler SQLite database file (leave blank to use ~/.butler/butler.db)",
+      "required": false
+    }
+  },
+  "tools_generated": true,
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["linux"]
+  }
+}

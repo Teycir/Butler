@@ -20,9 +20,12 @@
 
 ## Transport
 
-MCP server over stdio (JSON-RPC). Install via `npx butler-mcp install`
-(auto-configures Claude Desktop, Claude Code, Cursor, VS Code, Windsurf,
-Zed, Gemini CLI, Kiro CLI, Kilo Code) or manually per README.md.
+MCP server over stdio (JSON-RPC). Install via the `.mcpb` bundle attached to
+the latest GitHub Release (https://github.com/Teycir/Butler/releases/latest),
+or via `install/install.sh` / `install/install.ps1` which auto-configures
+Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Gemini CLI,
+Kiro CLI, Kilo Code. No npm package is published; see README.md for the
+build-from-source path.
 
 ## Core loop for any connecting agent
 
@@ -61,13 +64,14 @@ definition via the MCP `tools/list` method.
 ## Machine-readable manifests
 
 - `server.json` — Official MCP Registry manifest (registry.modelcontextprotocol.io),
-  namespace `io.github.teycir/butler`, points at the `butler-mcp` npm package.
+  namespace `io.github.Teycir/butler`, points at a `.mcpb` bundle attached to
+  a GitHub Release (no npm package).
+- `manifest.json` — MCPB bundle manifest used to build the `.mcpb` file via
+  `npx @anthropic-ai/mcpb pack`.
 - `.well-known/mcp/server-card.json` — full server card (tools, resources,
   compatible clients, categories) per SEP-1649.
 - `.well-known/mcp.json` — discovery pointer per SEP-1960.
-- `package.json` has `mcpName: "io.github.teycir/butler"` for npm-side
-  ownership verification against the registry entry.
-- README.md carries an `<!-- mcp-name: io.github.teycir/butler -->` marker
+- README.md carries an `<!-- mcp-name: io.github.Teycir/butler -->` marker
   required by the Official MCP Registry's ownership check.
 
 ## Docs
