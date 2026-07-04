@@ -8,6 +8,8 @@
 >
 > *"Simple like Git. Persistent like Notion. AI-Native like Cursor."*
 
+**Why not just a `TODO.md`?** Text files have no locking, no claims, no session tracking — two agents editing one at the same time silently overwrite each other, and a crashed agent leaves a task looking claimed forever. Butler gives every write a version, every claim a lock, and every session a heartbeat. [Full comparison ↓](#2-butler-vs-ad-hoc-storage--databases)
+
 ---
 
 <details>
