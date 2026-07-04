@@ -27,8 +27,26 @@
 
 ---
 
+## 🎯 Use Cases
+
+| Scenario | What happens without Butler | What Butler does |
+| :--- | :--- | :--- |
+| **Switching clients mid-task** (e.g. plan in Claude Desktop, implement in Cursor) | The new client starts cold — no idea what was decided or done | New session reads `butler://projects/{id}/context` and instantly gets the prior session's `handoffcreate` summary, open TODOs, and rules |
+| **Two agents editing the same repo concurrently** | Silent overwrites or duplicated work on the same task | `todoclaim`/`todounclaim` mark tasks as in-progress; `todocomplete`/`todoupdate` use optimistic version locks and emit a `TODO_CONFLICT` event if two sessions touch the same TODO within seconds |
+| **An agent crashes or the terminal is closed** | Its in-progress claims stay locked forever; no record of what it was doing | The lifecycle monitor marks the session `stale` after 60s, `dead` after 5 minutes, auto-releases its claims, and synthesizes an ungraceful handoff |
+| **Coordinating a large refactor across sessions** | Agents don't know what their peers are touching | `messagesend` for direct heads-up between two sessions, `broadcast` for announcements to everyone, both surfaced in the next `/context` read |
+| **Recording *why* a design decision was made** | Rationale lives only in chat history and gets lost when the window closes | `decisionrecord` logs an ADR (context + outcome) directly into the durable event log and project wiki |
+| **Onboarding a new agent/session into an existing project** | Re-explaining architecture, constraints, and conventions from scratch every time | `ruleadd` persists coding guidelines every session must follow; `wikiupdate` builds a shared reference doc; both are pulled into `/context` automatically |
+| **Finding relevant past context without re-reading everything** | Manually grepping chat logs or the whole codebase | `memorysearch` runs hybrid TF-IDF + recency ranking over stored summaries, decisions, rules, and wiki pages |
+| **Auditing what happened in a project over time** | No structured history, just scattered chat transcripts | `eventsexport` dumps the full append-only event log as JSON/NDJSON, filterable by session, type, or time range |
+| **Multi-step agent orchestration** (e.g. Plan → Implement → Verify → Commit) | Each phase runs in isolation with no shared checkpoint state | The built-in LangGraph checkpointer (`getLangGraphCheckpointer()`) persists thread state in the same SQLite DB, and `buildOrchestratorGraph` coordinates hand-offs between planning/implementing/verifying agents |
+| **Watching a live multi-agent workspace** | No visibility into who's doing what right now | `butler tui` / `butler dashboard` show live sessions, claims, conflicts, and handoff quality in real time |
+
+---
+
 ## 📑 Table of Contents
 
+- [Use Cases](#-use-cases)
 - [Butler in 3 Minutes](#-butler-in-3-minutes)
 - [Quickstart](#-quickstart)
 - [System Architecture](#️-system-architecture)
@@ -469,9 +487,37 @@ npm test
 
 Butler ships with a local command line interface (CLI) to configure, manage, and monitor your multi-agent workspaces — no MCP server connection required to run diagnostics or status checks.
 
+### `butler clients`
+
+Manages the opt-in registry of AI client config files Butler installs into (persisted to `~/.butler/clients.json`).
+
+```text
+$ butler clients list
+
+📋 Known AI clients
+
+  ✅  claude-desktop
+           /home/user/.config/Claude/claude_desktop_config.json
+     cursor
+     vscode
+     windsurf
+     zed
+     kiro-cli
+     kilo-code
+     ...
+
+  1 client(s) registered. Run `butler install` to apply.
+```
+
+- `butler clients list` — show all known client slugs plus which ones are currently registered.
+- `butler clients add <slug>` — register a known slug (resolves its default path automatically), or pass `--path /path/to/config.json` to register a custom/unknown tool under that slug.
+- `butler clients remove <slug>` — unregister a slug.
+
+**Note:** once at least one client has been registered (manually or via auto-detect on the very first `butler install` run), `butler install` only injects into the registered set — it does **not** re-scan for newly installed IDEs on subsequent runs. Use `butler clients add <slug>` to pick up a new client later.
+
 ### `butler install`
 
-Deploys the Butler production bundle to `~/Mcp/butler-mcp` and automatically injects the Butler MCP server configuration into your local AI client configuration files. If no clients are explicitly registered, it scans your system to auto-detect and register active clients. It supports comments (JSONC) and trailing commas safely.
+Deploys the Butler production bundle to `~/Mcp/butler-mcp` and injects the Butler MCP server configuration into your registered AI client configuration files. If no clients are registered yet (i.e. this is the first run), it scans your system once to auto-detect and register active clients; on subsequent runs it only touches whatever is already registered in `~/.butler/clients.json` (see `butler clients` above). It supports comments (JSONC) and trailing commas safely.
 
 ```text
 $ butler install
@@ -581,14 +627,21 @@ Launches a live split-screen Terminal User Interface (TUI) that refreshes every 
 
 ### `butler dashboard`
 
-Starts a local read-only web dashboard with SSE (Server-Sent Events) live pushing every 5 seconds to show active sessions, TODOs, conflict lists, and event trails.
+Starts a local web dashboard with SSE (Server-Sent Events) live pushing every 5 seconds to show active sessions, TODOs, conflict lists, and event trails. Runs **read-only** by default.
 
 ```text
 $ butler dashboard
 🌐 Serving Butler dashboard at http://localhost:7888
 ```
 
-Supports `--port <n>`, `--host <addr>`, and `--db <path>` flags.
+Pass `--dev` to start it in **writable** mode instead, which lets you complete, edit, or delete TODOs and send broadcasts directly from the dashboard UI (in addition to the read-only view):
+
+```bash
+npx tsx src/cli/dashboard.ts --dev
+# Mode:     dev-writable
+```
+
+Supports `--port <n>`, `--host <addr>`, `--db <path>`, and `--dev` flags.
 
 ### `butler ping`
 
@@ -781,7 +834,7 @@ Butler includes a built-in multi-agent state graph definition (`OrchestratorStat
 ```text
 Butler/
 ├── src/
-│   ├── db/            # SQLite connection pool, WAL mode, versioned schema migrations (v1–v8)
+│   ├── db/            # SQLite connection pool, WAL mode, versioned schema migrations (v1–v8), Zod schemas (zod.ts)
 │   ├── events/        # Event store (append-only log), materializer, projections, type definitions
 │   ├── coordinator/   # Heartbeat registry, session lifecycle, handoff quality scoring, session helpers
 │   ├── vector/        # Pure-JS TF-IDF sparse memory indexer + cosine similarity
@@ -800,7 +853,8 @@ Butler/
 │   │       ├── coordination/            # Coordination sub-handlers (sync.ts)
 │   │       └── observability.tools.ts   # eventsexport, butlerping
 │   ├── cli/
-│   │   ├── main.ts        # CLI entry point and command router
+│   │   ├── main.ts        # CLI entry point and command router (install, init, clients, ping, doctor)
+│   │   ├── clientConfigs.ts # Known AI client config paths + opt-in client registry (~/.butler/clients.json)
 │   │   ├── status.ts      # `npm run status` — terminal project summary
 │   │   ├── tui.ts         # `npm run tui` — live split-screen terminal UI
 │   │   ├── tuiRenderer.ts # TUI rendering logic
