@@ -32,7 +32,7 @@
 - [Butler in 3 Minutes](#-butler-in-3-minutes)
 - [Quickstart](#-quickstart)
 - [System Architecture](#️-system-architecture)
-- [The Killer Demo](#-the-killer-demo-cross-client-session-continuity)
+- [Workflow Demo](#-workflow-demo-cross-client-session-continuity)
 - [Core Terminology](#-core-terminology)
 - [API & Tool Surface](#-api--tool-surface)
   - [Resources](#resources)
@@ -311,7 +311,7 @@ graph TD
 
 ---
 
-## 🔄 The Killer Demo: cross-client session continuity
+## 🔄 Workflow Demo: cross-client session continuity
 
 Imagine this workflow:
 
