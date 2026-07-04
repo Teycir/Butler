@@ -195,6 +195,25 @@ Unlike general-purpose agent memory platforms (which require hosted cloud APIs, 
 
 #### 2. Butler vs. Ad-hoc Storage & Databases
 
+The obvious cheap alternative is a `TODO.md` or `context.txt` the agent reads and edits directly. It works, until more than one thing touches it:
+
+- **Concurrent writes silently clobber each other.** If two agents (or two tabs of the same agent) both read the file, edit it, and write it back, the second write wins and the first agent's changes vanish — no error, no merge, just gone. Butler's SQLite event log gives every write a version number; a stale write is rejected instead of silently overwriting.
+- **A flat file has no session concept.** There's no way to tell "who wrote this line and when," or to detect that the agent that claimed a task crashed 20 minutes ago and the task is actually free again. Butler tracks sessions with heartbeats, so dead agents don't hold a task forever.
+- **Context only grows.** A markdown file accumulates every decision and TODO ever written, so agents either re-read a growing wall of text every turn (token cost climbs over the project's lifetime) or a human has to manually prune it. Butler materializes a current-state view from the event log — closed TODOs and superseded decisions drop out of what the agent reads, while the full history stays queryable if you ever need it.
+- **No structured handoff.** Passing context from one tool to another means copy-pasting the relevant bit of the file into a prompt by hand. Butler's `handoffcreate`/`sessiondisconnect` gives the next session a specific, structured summary to pick up from — not "here's the whole file, figure out where I left off."
+- **Diffing a markdown file tells you what changed, not why or by whom.** Butler's event log is append-only and attributes every change to a session, so `eventsexport` gives you a real audit trail instead of a git diff on prose.
+
+None of this means `TODO.md` is bad — for a single agent working alone, it's fine, and often simpler. Butler earns its keep specifically when more than one agent (or more than one tool) touches the same project.
+
+**"But what if every agent just re-reads `TODO.md` at the start of each session?"** That genuinely solves amnesia for a single agent working sequentially — read the file, pick up where you left off, no dependency needed. It stops working the moment two agents can be active at overlapping times:
+
+- **Read-then-write races.** Agent A reads `TODO.md` at t=0, starts a long task. Agent B reads the same file at t=1, also starts working, then finishes first and writes back its version — silently erasing whatever A was about to add. Re-reading at session *start* doesn't help if the write happens at session *end*; the race is on the write, not the read.
+- **"Re-read at the start of each session" only works if sessions don't overlap.** Two IDE windows open on the same repo right now, both mid-task, is the actual multi-agent case Butler targets — and no file-reread policy fixes a write collision between two sessions that are already both open.
+- **Nothing tells B that a TODO is *claimed*, only that it exists.** A can mark a line "in progress," but there's no lock — B can start the same item five seconds later because the file doesn't enforce anything, it just describes. Butler's `todoclaim` is an actual claim other agents are blocked from taking, not a note that can be ignored.
+- **A crashed agent leaves a lie in the file.** If A claims a TODO in the text and then dies, that TODO looks permanently claimed to every future reader — nothing expires it. Butler's session heartbeats detect the dead session and free the claim automatically.
+
+So the re-read pattern is a real, valid simplification exactly when you can guarantee one agent at a time. Butler is for the case where you can't — or don't want to have to.
+
 | Dimension | Butler | Plain Text Files (`context.txt`) | Heavy DBs (Postgres/Redis) |
 | :--- | :--- | :--- | :--- |
 | **Portability** | 0-Click Local SQLite | Hard to version-control safely | Complex Docker setup |
