@@ -3,3 +3,8 @@
 node_modules
 dist
 .mcp-publisher-bin
+
+# Stray compiled output from VS Code extensions (e.g. Compilets) that
+# emit a sibling .js next to each .ts file in place, ignoring tsconfig's
+# outDir. Real build output only ever belongs in dist/.
+src/**/*.js

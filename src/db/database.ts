@@ -1,16 +1,41 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { createHash } from 'crypto';
 import { INIT_SCHEMA_SQL, VERSIONED_MIGRATIONS, type Migration } from './schema.js';
 
 let dbInstance: Database.Database | null = null;
 
-export function getDatabasePath(projectRoot: string = process.cwd()): string {
+/**
+ * Butler's DB is one shared SQLite file holding every project's data
+ * (keyed by project_id — see the `projects` table), never one DB per
+ * repo. It must therefore live OUTSIDE any repo Butler is used in, or
+ * every project working directory ends up with its own stray
+ * .butler/butler.db that has to be gitignored by hand. `~/.butler/`
+ * is the single canonical home for it, matching what `butler install`
+ * (cli/main.ts's handleInstall) already computes and injects as
+ * BUTLER_DB_PATH into every registered AI client config.
+ *
+ * `projectRoot` is no longer used to build the default path (fixed
+ * 2026-08-23: it previously defaulted to `${projectRoot}/.butler/`,
+ * i.e. process.cwd() when called with no argument — which put a real,
+ * growing SQLite DB inside whatever repo Butler happened to be
+ * launched from whenever BUTLER_DB_PATH wasn't set, e.g. a client
+ * config predating the env-var wiring, a stale/ad hoc `npx` invocation,
+ * or `butler ping`/`butler doctor` run directly inside a repo). The
+ * parameter is kept, defaulted to process.cwd(), only so
+ * findProjectConfig-style callers/tests that still pass it don't break
+ * — it is intentionally ignored for path construction now.
+ */
+export function getDatabasePath(_projectRoot: string = process.cwd()): string {
   if (process.env.BUTLER_DB_PATH) {
-    return path.resolve(projectRoot, process.env.BUTLER_DB_PATH);
+    // An explicit override is always honored verbatim (resolved against
+    // cwd only if given as a relative path — matches path.resolve's own
+    // behavior: an absolute BUTLER_DB_PATH passes through unchanged).
+    return path.resolve(process.env.BUTLER_DB_PATH);
   }
-  const defaultDir = path.join(projectRoot, '.butler');
+  const defaultDir = path.join(os.homedir(), '.butler');
   if (!fs.existsSync(defaultDir)) {
     fs.mkdirSync(defaultDir, { recursive: true });
   }

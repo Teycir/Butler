@@ -8,7 +8,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
 import readline from 'readline';
 import { execSync } from 'child_process';
@@ -190,10 +189,15 @@ async function handleInstall() {
   console.log('  ✅ dist/ synced');
 
   // ── Step 3: Ensure DB dir exists ──────────────────────────────────────────
+  // Default computed via getDatabasePath() (db/database.ts) rather than a
+  // second hardcoded `~/.butler/butler.db` literal here — fixed 2026-08-23
+  // alongside that function's own default-path fix, so this command and
+  // every other DB-path call site share exactly one definition of "where
+  // Butler's DB lives" instead of two copies that could drift apart again.
   const dbPathIdx = process.argv.indexOf('--db-path');
   const dbPath = dbPathIdx !== -1
     ? process.argv[dbPathIdx + 1]
-    : (process.env.BUTLER_DB_PATH || path.join(os.homedir(), '.butler', 'butler.db'));
+    : getDatabasePath();
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const entry = path.join(releaseDir, 'dist', 'index.js');

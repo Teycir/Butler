@@ -7,7 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { initDatabase } from '../db/database.js';
+import { initDatabase, getDatabasePath } from '../db/database.js';
 import { createServer, startPolling } from './dashboardServer.js';
 
 // ─── Arg parsing ──────────────────────────────────────────────────────────────
@@ -35,9 +35,15 @@ function parseArgs(argv: string[]): DashboardArgs {
 function main() {
   const args = parseArgs(process.argv.slice(2));
 
+  // Default routed through getDatabasePath() (db/database.ts), not a
+  // third hardcoded `${cwd}/.butler/butler.db` literal — fixed 2026-08-23
+  // alongside that function's own default-path fix (see its header
+  // comment): this was the third independent copy of the same
+  // "defaults into whatever repo you launch it from" bug, and this one
+  // didn't even honor BUTLER_DB_PATH at all.
   const dbPath = args.db
     ? path.resolve(process.cwd(), args.db)
-    : path.join(process.cwd(), '.butler', 'butler.db');
+    : getDatabasePath();
 
   if (!fs.existsSync(dbPath) && !args.dev) {
     console.warn(`⚠️  Database not found: ${dbPath}`);
